@@ -66,7 +66,13 @@ type Core struct {
 	// tenantLog waits for SetDelivery, which knows the bounce window, to
 	// rebuild the tenant monitors.
 	tenantLog []store.TenantEvent
+	// signer adds the DKIM-Signature at ingest, so every attempt sends the
+	// same bytes; nil signs nothing.
+	signer *Signer
 }
+
+// SetSigner makes Ingest sign the messages of the signer's domains.
+func (c *Core) SetSigner(s *Signer) { c.signer = s }
 
 // NewCore rebuilds the core from a snapshot and runs start-up recovery:
 // every attempt that was started and has no recorded result goes back to
@@ -178,9 +184,17 @@ func (c *Core) Ingest(s *Submission, key string) IngestResult {
 	}
 	c.lastN++
 	id := msgIDFor(c.lastN)
+	raw := BuildMessage(id, s, c.clk.Now())
+	if c.signer != nil {
+		// A loaded RSA key does not fail to sign; if it ever did, the
+		// message goes unsigned and the receiver's dkim result shows it.
+		if signed, err := c.signer.Sign(s.From, raw); err == nil {
+			raw = signed
+		}
+	}
 	m := &store.Message{
 		N: c.lastN, ID: id, Tenant: s.Tenant, From: s.From, To: s.To, Domain: domainOf(s.To),
-		MsgType: s.MsgType, PayloadSHA256: sum, Raw: BuildMessage(id, s, c.clk.Now()),
+		MsgType: s.MsgType, PayloadSHA256: sum, Raw: raw,
 		State: store.StateQueued, NextAtMs: now, AcceptedAtMs: now, UpdatedAtMs: now,
 	}
 	c.msgs[id] = m

@@ -14,7 +14,9 @@ import (
 	"slices"
 	"strconv"
 	"syscall"
+	"time"
 
+	"github.com/CesarManzoCode/mta-proof/internal/auth"
 	"github.com/CesarManzoCode/mta-proof/internal/sim"
 	"github.com/CesarManzoCode/mta-proof/internal/tlslab"
 )
@@ -69,7 +71,20 @@ func serve(args []string) error {
 	if *tlsKind != tlslab.Off && !slices.Contains(tlslab.Kinds, *tlsKind) {
 		return fmt.Errorf("-tls %q: want off or one of %v", *tlsKind, tlslab.Kinds)
 	}
-	recv, err := sim.NewReceiver(sim.Config{Dir: *out, Profiles: profiles, NoSync: *noSync, StartTLS: *tlsKind != tlslab.Off})
+	if zone.HasDKIM() {
+		// New DKIM keys for every run; the engine signs with the private
+		// keys of <out>/dkim and the lab DNS publishes the public ones.
+		dir := filepath.Join(*out, "dkim")
+		if err := zone.GenerateDKIM(dir); err != nil {
+			return fmt.Errorf("dkim: %w", err)
+		}
+		log.Printf("dkim keys %s", dir)
+	}
+	// The auth rules query the lab DNS: over UDP once it listens, in
+	// process when mtasim serves no DNS.
+	resolver := &auth.Resolver{Exchange: auth.AnswerExchange(zone.Answer)}
+	recv, err := sim.NewReceiver(sim.Config{Dir: *out, Profiles: profiles, NoSync: *noSync,
+		StartTLS: *tlsKind != tlslab.Off, Auth: resolver})
 	if err != nil {
 		return err
 	}
@@ -101,6 +116,7 @@ func serve(args []string) error {
 			return fmt.Errorf("dns: %w", err)
 		}
 		defer d.Shutdown()
+		resolver.Exchange = auth.UDPExchange(d.Addr(), 5*time.Second)
 		log.Printf("dns %s", d.Addr())
 	}
 	for _, host := range recv.Hosts() {

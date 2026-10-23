@@ -127,7 +127,9 @@ type latencyParams struct {
 	Ms    int    `json:"ms"`
 }
 
-// authParams is accepted and validated now; k2-04 implements the checks.
+// authParams: every method in Require must pass; otherwise the reply to
+// DATA is DMARCRejectResponse when DMARC failed under an effective "reject"
+// policy and the profile has one, and FailResponse in any other case.
 type authParams struct {
 	Require             []string  `json:"require"`
 	FailResponse        *Response `json:"fail_response,omitempty"`
@@ -149,6 +151,7 @@ type compiledRule struct {
 	srcIPs      []netip.Prefix
 	drop        *dropParams
 	latency     *latencyParams
+	auth        *authParams
 }
 
 // appliesTo reports whether a limit rule applies to the source address.
@@ -507,18 +510,27 @@ func compileRule(r *Rule) ([]*compiledRule, []Response, error) {
 		if err := strictUnmarshal(r.Params, &p); err != nil {
 			return nil, nil, err
 		}
+		if len(p.Require) == 0 {
+			return nil, nil, errors.New("require lists no method")
+		}
 		for _, m := range p.Require {
 			if m != "spf" && m != "dkim" && m != "dmarc" {
 				return nil, nil, fmt.Errorf("unknown auth method %q", m)
 			}
 		}
+		if p.FailResponse == nil {
+			return nil, nil, errors.New("fail_response is required")
+		}
 		for _, resp := range []*Response{p.FailResponse, p.DMARCRejectResponse} {
 			if resp != nil {
+				if resp.Code < 500 {
+					return nil, nil, errors.New("auth responses are 5xx")
+				}
 				responses = append(responses, *resp)
 			}
 		}
-		// Accepted in the format; enforcement lands in k2-04.
-		return nil, responses, nil
+		base.auth = &p
+		return []*compiledRule{&base}, responses, nil
 	}
 	return nil, nil, fmt.Errorf("unknown kind %q", r.Kind)
 }
@@ -557,12 +569,21 @@ func parsePrefixes(list []string) ([]netip.Prefix, error) {
 
 // isTestName reports whether s is a host name under the .test TLD
 // (RFC 6761 §6.2).
-func isTestName(s string) bool {
+func isTestName(s string) bool { return testName(s, false) }
+
+// isZoneName is isTestName that also admits labels starting with "_", as
+// the DKIM key ("_domainkey") and DMARC ("_dmarc") names do.
+func isZoneName(s string) bool { return testName(s, true) }
+
+func testName(s string, underscore bool) bool {
 	s = strings.TrimSuffix(strings.ToLower(s), ".")
 	if !strings.HasSuffix(s, ".test") || len(s) > 253 {
 		return false
 	}
 	for _, label := range strings.Split(s, ".") {
+		if underscore && len(label) > 1 && label[0] == '_' {
+			label = label[1:]
+		}
 		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
 			return false
 		}

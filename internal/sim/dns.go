@@ -23,10 +23,17 @@ type Zone struct {
 
 	byName map[string][]ZoneRecord
 	exists map[string]bool
+	// dkim holds the TXT value of each DKIM record once GenerateDKIM ran.
+	dkim map[string]string
 }
 
 // ZoneRecord is one resource record. MX uses pref and host (host "." is a
-// null MX, RFC 7505 §3), A uses addr, TXT uses text.
+// null MX, RFC 7505 §3), A uses addr, TXT uses text. DKIM is a DKIM key
+// record [R-6376 §3.6.2] named <selector>._domainkey.<domain> whose key
+// is generated for every run (GenerateDKIM); key is "signing" (the
+// published key is the one the sender signs with) or "other" (the
+// published key belongs to another pair: a broken configuration). It is
+// served as TXT.
 type ZoneRecord struct {
 	Name string  `json:"name"`
 	Type string  `json:"type"`
@@ -34,7 +41,14 @@ type ZoneRecord struct {
 	Host string  `json:"host,omitempty"`
 	Addr string  `json:"addr,omitempty"`
 	Text string  `json:"text,omitempty"`
+	Key  string  `json:"key,omitempty"`
 }
+
+// DKIM key kinds of a DKIM zone record.
+const (
+	DKIMSigning = "signing"
+	DKIMOther   = "other"
+)
 
 const zoneApex = "test."
 
@@ -62,10 +76,12 @@ func ParseZone(data []byte) (*Zone, error) {
 	}
 	z.byName = map[string][]ZoneRecord{}
 	z.exists = map[string]bool{zoneApex: true}
+	z.dkim = map[string]string{}
+	dkimDomains := map[string]bool{}
 	var errs []error
 	for i, r := range z.Records {
 		where := fmt.Sprintf("record %d (%s %s)", i, r.Name, r.Type)
-		if !isTestName(r.Name) {
+		if !isZoneName(r.Name) {
 			errs = append(errs, fmt.Errorf("%s: name is not under .test", where))
 			continue
 		}
@@ -91,6 +107,19 @@ func ParseZone(data []byte) (*Zone, error) {
 			if r.Text == "" {
 				errs = append(errs, fmt.Errorf("%s: text is required", where))
 			}
+		case "DKIM":
+			_, domain, ok := strings.Cut(strings.TrimSuffix(r.Name, "."), "._domainkey.")
+			switch {
+			case !ok || strings.HasPrefix(r.Name, "_"):
+				errs = append(errs, fmt.Errorf("%s: name is not <selector>._domainkey.<domain>", where))
+			case dkimDomains[domain]:
+				errs = append(errs, fmt.Errorf("%s: one DKIM record per domain", where))
+			case r.Key != DKIMSigning && r.Key != DKIMOther:
+				errs = append(errs, fmt.Errorf("%s: key must be %q or %q", where, DKIMSigning, DKIMOther))
+			case r.Text != "":
+				errs = append(errs, fmt.Errorf("%s: the key text is generated, not given", where))
+			}
+			dkimDomains[domain] = true
 		default:
 			errs = append(errs, fmt.Errorf("%s: unsupported type", where))
 		}
@@ -155,6 +184,9 @@ func (z *Zone) rr(r ZoneRecord) dns.RR {
 	case "MX":
 		hdr.Rrtype = dns.TypeMX
 		return &dns.MX{Hdr: hdr, Preference: *r.Pref, Mx: r.Host}
+	case "DKIM":
+		hdr.Rrtype = dns.TypeTXT
+		return &dns.TXT{Hdr: hdr, Txt: splitTXT(z.dkim[r.Name])}
 	default:
 		hdr.Rrtype = dns.TypeTXT
 		return &dns.TXT{Hdr: hdr, Txt: splitTXT(r.Text)}
@@ -199,6 +231,9 @@ func (z *Zone) Answer(req *dns.Msg) *dns.Msg {
 		m.Answer = append(m.Answer, z.soa())
 	}
 	for _, r := range z.byName[name] {
+		if r.Type == "DKIM" && z.dkim[r.Name] == "" {
+			continue // no key generated: the name exists without a record
+		}
 		rr := z.rr(r)
 		if q.Qtype == dns.TypeANY || rr.Header().Rrtype == q.Qtype {
 			rr.Header().Name = q.Name

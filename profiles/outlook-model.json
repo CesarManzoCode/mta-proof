@@ -1,7 +1,7 @@
 {
   "name": "outlook-model",
   "sources": ["R-MS-515", "R-MS-509"],
-  "limitations": "El texto 550 5.7.509 proviene de fuentes secundarias (R-MS-509). Microsoft no publica límites de conexiones: el de concurrencia es supuesto y sin respuesta documentada, por eso cierra en silencio. La regla auth se acepta en el formato y se aplica desde k2-04.",
+  "limitations": "El texto 550 5.7.509 proviene de fuentes secundarias (R-MS-509). Microsoft no publica límites de conexiones: el de concurrencia es supuesto y sin respuesta documentada, por eso cierra en silencio. La regla auth solo se aplica en modo real: en mtadst el motor no firma y el receptor no verifica.",
   "adaptation_period_s": 300,
   "hosts": ["mx1.outlook-model.test"],
   "rules": [

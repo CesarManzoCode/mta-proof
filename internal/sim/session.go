@@ -2,8 +2,10 @@ package sim
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"path/filepath"
 	"slices"
@@ -11,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/CesarManzoCode/mta-proof/internal/auth"
 )
 
 // Clock is the time source of the receiver: the wall clock in mtasim, a
@@ -37,7 +41,13 @@ type Config struct {
 	// StartTLS offers the STARTTLS extension [R-3207] on every host; the
 	// transport runs the handshake.
 	StartTLS bool
+	// Auth resolves the lookups of the auth rules (the lab DNS). Nil
+	// leaves auth rules unapplied: mtadst signs nothing and checks nothing.
+	Auth *auth.Resolver
 }
+
+// authTimeout bounds the DNS lookups of one auth check (supuesto).
+const authTimeout = 5 * time.Second
 
 // Receiver holds the state shared by all sessions: profiles, the host to
 // profile map, per-profile counters, the log and the message store. It is
@@ -52,6 +62,7 @@ type Receiver struct {
 	state    map[string]*profileState
 	nextConn int64
 	startTLS bool
+	auth     *auth.Resolver
 }
 
 type windowKey struct {
@@ -81,6 +92,7 @@ func NewReceiver(cfg Config) (*Receiver, error) {
 		hosts:    map[string]string{},
 		state:    map[string]*profileState{},
 		startTLS: cfg.StartTLS,
+		auth:     cfg.Auth,
 	}
 	names := make([]string, 0, len(cfg.Profiles))
 	for name := range cfg.Profiles {
@@ -233,6 +245,7 @@ type Session struct {
 	dst     netip.Addr
 
 	greeted  bool
+	helo     string
 	inTx     bool
 	mailFrom string
 	rcpts    []string
@@ -335,7 +348,7 @@ func (s *Session) cmdHello(verb, arg string) Result {
 	s.emit(Event{Ev: EvEHLO})
 	// RFC 5321 §4.1.4: a later EHLO resets the state like RSET.
 	s.resetTx()
-	s.greeted = true
+	s.greeted, s.helo = true, arg
 	if verb == "HELO" {
 		return s.reply(Response{Code: 250, Text: s.host}, StageEHLO)
 	}
@@ -493,6 +506,7 @@ func (s *Session) DropData() Result {
 func (s *Session) Data(msg []byte) Result {
 	sum, storeErr := s.r.store.Put(msg)
 	msgID := headerValue(msg, "X-Mtaproof-Id")
+	authLog, authReject := s.checkAuth(msg)
 
 	s.r.mu.Lock()
 	if s.ended || !s.inData {
@@ -502,10 +516,12 @@ func (s *Session) Data(msg []byte) Result {
 	resp, closeAfter := Response{250, "2.0.0", "OK"}, false
 	if storeErr != nil {
 		resp, sum = Response{451, "4.3.0", "Requested action aborted: local error in processing"}, ""
+	} else if authReject != nil {
+		resp = render(*authReject, domainOf(s.mailFrom))
 	} else if c, rcptOK := s.matchRespond(StageDataEnd, ""); c != nil && rcptOK {
 		resp, closeAfter = render(c.respond.Response, domainOf(s.mailFrom)), c.respond.Close
 	}
-	res := s.finishData(resp, msgID, sum)
+	res := s.finishData(resp, msgID, sum, authLog)
 	if closeAfter {
 		s.end(EvClose, "")
 		res.Close = true
@@ -526,17 +542,55 @@ func (s *Session) DataOversize() Result {
 		s.r.mu.Unlock()
 		return Result{Close: s.ended}
 	}
-	res := s.finishData(Response{552, "5.3.4", "Too much mail data."}, "", "")
+	res := s.finishData(Response{552, "5.3.4", "Too much mail data."}, "", "", nil)
 	s.r.mu.Unlock()
 	s.r.log.Sync()
 	return res
 }
 
-func (s *Session) finishData(resp Response, msgID, sum string) Result {
+// checkAuth runs the profile's auth rule on a message, outside the lock
+// because it queries the lab DNS. It returns the auth field of data_end
+// (nil without an applied rule) and, when a required method failed, the
+// reply to DATA: the DMARC reject response if DMARC failed under an
+// effective "reject" policy and the rule has one, the fail response
+// otherwise.
+func (s *Session) checkAuth(msg []byte) (*Auth, *Response) {
+	s.r.mu.Lock()
+	var rule *authParams
+	for _, c := range s.profile.compiled {
+		if c.kind == KindAuth {
+			rule = c.auth
+			break
+		}
+	}
+	from, helo := s.mailFrom, s.helo
+	s.r.mu.Unlock()
+	if rule == nil || s.r.auth == nil {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), authTimeout)
+	defer cancel()
+	res := auth.Check(ctx, s.r.auth, auth.Input{IP: net.IP(s.src.AsSlice()), Helo: helo, MailFrom: from, Message: msg})
+	log := &Auth{SPF: res.SPF, DKIM: res.DKIM, DMARC: res.DMARC}
+	got := map[string]string{"spf": res.SPF, "dkim": res.DKIM, "dmarc": res.DMARC}
+	for _, m := range rule.Require {
+		if got[m] == auth.Pass {
+			continue
+		}
+		if res.DMARC == auth.Fail && res.Policy == auth.PolicyReject && rule.DMARCRejectResponse != nil {
+			return log, rule.DMARCRejectResponse
+		}
+		return log, rule.FailResponse
+	}
+	return log, nil
+}
+
+func (s *Session) finishData(resp Response, msgID, sum string, authLog *Auth) Result {
 	from := s.mailFrom
 	s.emit(Event{
 		Ev: EvDataEnd, MailFrom: &from, Rcpt: strings.Join(s.rcpts, ","),
 		MsgID: msgID, Sha256: sum, Code: resp.Code, Enhanced: &resp.Enhanced, Text: &resp.Text, TLS: s.tls,
+		Auth: authLog,
 	})
 	s.resetTx()
 	return Result{

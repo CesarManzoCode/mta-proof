@@ -45,6 +45,15 @@ type Event struct {
 	Rule     string  `json:"rule,omitempty"`
 	Counted  *bool   `json:"counted,omitempty"`
 	TLS      *TLS    `json:"tls,omitempty"`
+	Auth     *Auth   `json:"auth,omitempty"`
+}
+
+// Auth is the auth field of a data_end checked by an auth rule: SPF, DKIM
+// and DMARC, each "pass" or "fail" (contract 3.4).
+type Auth struct {
+	SPF   string `json:"spf"`
+	DKIM  string `json:"dkim"`
+	DMARC string `json:"dmarc"`
 }
 
 // TLS is the tls field of a starttls line (the outcome of the handshake)

@@ -61,10 +61,16 @@ func Run(ctx context.Context, rc RunConfig) error {
 
 func run(ctx context.Context, cfg ServeConfig, rc *RunConfig) error {
 	var roots *x509.CertPool
-	if rc != nil && rc.Config.TLS != nil && rc.Config.TLS.CAFile != "" {
+	var signer *Signer
+	if rc != nil {
 		var err error
-		if roots, err = tlslab.LoadPool(rc.Config.TLS.CAFile); err != nil {
-			return fmt.Errorf("tls.ca_file: %w", err)
+		if rc.Config.TLS != nil && rc.Config.TLS.CAFile != "" {
+			if roots, err = tlslab.LoadPool(rc.Config.TLS.CAFile); err != nil {
+				return fmt.Errorf("tls.ca_file: %w", err)
+			}
+		}
+		if signer, err = LoadSigner(rc.Config.DKIM); err != nil {
+			return fmt.Errorf("dkim: %w", err)
 		}
 	}
 	st, err := store.Open(cfg.DB)
@@ -84,6 +90,7 @@ func run(ctx context.Context, cfg ServeConfig, rc *RunConfig) error {
 	defer cancel()
 	if rc != nil {
 		core.SetDelivery(rc.Config, clock.Rand(cfg.Seed, "engine.mx"))
+		core.SetSigner(signer)
 	}
 	runner := NewRunner(core, st, cfg.MaxBatch)
 	runErr := make(chan error, 1)

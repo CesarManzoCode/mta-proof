@@ -13,6 +13,10 @@
 - TLS de laboratorio: `mtasim serve --tls valid|other-ca|wrong-name` genera en cada corrida una CA de prueba con `crypto/x509` (paquete `internal/tlslab`), escribe su certificado en `<out>/tls/ca.pem`, anuncia STARTTLS en todos los hosts, negocia con `crypto/tls` y anota el campo `tls` en `starttls` y en cada `data_end` recibido por TLS.
 - Política STARTTLS del motor (`tls` en la configuración, contrato 2.6, D16): `opportunistic` o `required` por dominio, por proveedor o por defecto, con `ca_file` como única CA de confianza. Evento `tls_negotiated` con versión, suite, si verificó y el error; un `required` que no se cumple es `deferred` con `rfc3207.tls_required` (`transient`/`TLSPolicy`). `tls-required.test` en la zona, con el mismo MX que `baseline.test`.
 - Propiedad `tls_policy`: tres corridas reales en el espacio de nombres, con certificado de otra CA, con nombre equivocado y válido; con los inválidos el dominio oportunista se entrega cifrado y el requerido se difiere sin llegar al `RCPT`, con el válido los dos se entregan cifrados.
+- Firma DKIM saliente en el motor (`dkim` en la configuración, contrato 2.6) con `github.com/emersion/go-msgauth` v0.7.0: `rsa-sha256`, `relaxed/relaxed`, claves RSA de 2048 bits; el mensaje se firma en el ingreso y se guarda firmado.
+- DKIM de laboratorio: el tipo `DKIM` de `lab/zone.json` (`key` `signing` u `other`); `mtasim` genera las claves de cada corrida, escribe las privadas en `<out>/dkim/` y publica las públicas. La zona trae SPF, DKIM y DMARC de `baseline.test` y `auth-good.test` y la variante rota `auth-broken.test` (SPF que excluye las IPs del pool y clave DKIM que no corresponde).
+- Regla `auth` aplicada en modo real (paquete `internal/auth`): SPF con `blitiri.com.ar/go/spf` v1.6.0 sobre el DNS de laboratorio, DKIM con `dkim.VerifyWithOptions` y DMARC según el subconjunto de RFC 9989 de D07; resultado en el campo `auth` de cada `data_end`. `outlook-model` responde `550 5.7.515` (o `550 5.7.509` con `p=reject`) y `gmail-model` `550 5.7.26`.
+- Propiedades `outbound_auth` (corrida real: los mensajes de `auth-good.test` pasan los tres métodos; los de `auth-broken.test` tienen un solo intento, `550 5.7.515` y `permanent`/`AuthConfig`) y `rfc5322_format` (todo `.eml` capturado en `out/runs/` se analiza sin defectos con `email.policy.strict`).
 
 ### Decisiones
 
@@ -26,6 +30,10 @@
 - La política `opportunistic` también verifica el certificado, pero solo para registrarlo en `tls_negotiated` (`verified`, `error`); no lo exige, como pide D16. Así el registro del motor muestra con qué certificado se entregó cada conexión oportunista.
 - Un handshake fallido bajo `opportunistic` deja la conexión inservible, así que la caída a texto plano de D16 vuelve a marcar la misma dirección sin STARTTLS (`fallback` en el evento). Bajo `required`, una falla de política pasa a la siguiente dirección como una falla de conexión y, si ninguna sirve, difiere contando el reintento: R-3207 §6 pide reintentar TLS en una sesión posterior hasta un plazo local, que aquí es la vida del mensaje.
 - `mtasim` presenta un solo certificado por corrida en todos sus hosts, elegido con `--tls`: el escenario de la corrida, no el perfil, decide qué TLS ve el motor, y la campaña real de K1 sigue sin STARTTLS (`--tls off`). Medido (`tls_policy` sola): tres corridas de 0,30 a 0,32 s.
+- La regla `auth` solo se aplica en modo real: la firma lleva `t=` del reloj de pared y claves nuevas por corrida, que romperían el determinismo de `mtadst`. En modo simulado el motor no firma y el receptor no verifica.
+- `baseline.test`, el remitente de la campaña real, recibe SPF, DKIM y DMARC `p=none`: con la regla `gmail.auth` (exige DMARC) aplicada, la campaña rebotaría todo lo dirigido a `gmail-model.test`.
+- Las claves DKIM las genera `mtasim`, que publica la zona, y el motor solo las lee de `dkim.key_dir`: así la variante rota (clave publicada de otro par) no necesita código propio en el motor.
+- `gmail-model` exige solo DMARC: Google publica los códigos (R-GOOGLE-ERR) pero sus directrices no se pudieron leer (R-GMAIL-GUIDE), así que lo exigido es supuesto y la regla lo declara. `outlook-model` exige los tres, como dice R-MS-515.
 
 ## [K1] - 2026-10-23
 

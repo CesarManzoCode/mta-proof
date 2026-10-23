@@ -6,12 +6,16 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/CesarManzoCode/mta-proof/internal/auth"
+	"github.com/CesarManzoCode/mta-proof/internal/engine"
 )
 
 type fakeClock struct{ t time.Time }
@@ -412,15 +416,113 @@ func TestLatency(t *testing.T) {
 	}
 }
 
-func TestAuthAcceptedButNotEnforced(t *testing.T) {
+// Without a resolver (mtadst) an auth rule is not applied.
+func TestAuthNotAppliedWithoutResolver(t *testing.T) {
 	p := testProfile(t, 0, `{"id": "a.auth", "kind": "auth", "params": {"require": ["spf", "dkim"],
 		"fail_response": {"code": 550, "enhanced": "5.7.26", "text": "This email has been blocked because the sender is unauthenticated."}},
 		"source": "R-GOOGLE-ERR", "assumption": false}`)
-	r, _, _ := newTestReceiver(t, p)
+	r, _, dir := newTestReceiver(t, p)
 	s, _ := open(t, r, ipKnown)
 	mustCode(t, s, "EHLO c.test", 250)
 	if code(deliver(t, s, "u@p.test", "1")) != 250 {
-		t.Fatal("auth is enforced only from k2-04")
+		t.Fatal("auth applied without a resolver")
+	}
+	if e := eventsOf(readEvents(t, dir), EvDataEnd)[0]; e["auth"] != nil {
+		t.Fatalf("auth logged without a check: %v", e)
+	}
+}
+
+// The auth rules of the repository's outlook-model and gmail-model against
+// an in-memory zone with the lab's good and broken sender configurations.
+func TestAuthRuleOutlookAndGmail(t *testing.T) {
+	profiles, err := LoadProfiles("../../profiles", researchIndex(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	z, err := ParseZone([]byte(`{"records": [
+		{"name": "good.test", "type": "TXT", "text": "v=spf1 ip4:127.0.2.0/24 -all"},
+		{"name": "lab._domainkey.good.test", "type": "DKIM", "key": "signing"},
+		{"name": "_dmarc.good.test", "type": "TXT", "text": "v=DMARC1; p=reject; adkim=s; aspf=s"},
+		{"name": "broken.test", "type": "TXT", "text": "v=spf1 -ip4:127.0.2.0/24 ?all"},
+		{"name": "lab._domainkey.broken.test", "type": "DKIM", "key": "other"},
+		{"name": "_dmarc.broken.test", "type": "TXT", "text": "v=DMARC1; p=none"},
+		{"name": "reject.test", "type": "TXT", "text": "v=spf1 -ip4:127.0.2.0/24 ?all"},
+		{"name": "lab._domainkey.reject.test", "type": "DKIM", "key": "other"},
+		{"name": "_dmarc.reject.test", "type": "TXT", "text": "v=DMARC1; p=reject"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := t.TempDir()
+	if err := z.GenerateDKIM(keys); err != nil {
+		t.Fatal(err)
+	}
+	signer, err := engine.LoadSigner(&engine.DKIM{KeyDir: keys, Selector: "lab", Domains: []string{"good.test", "broken.test", "reject.test"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	r, err := NewReceiver(Config{Dir: dir, Profiles: profiles, Clock: &fakeClock{t: time.UnixMilli(1_000_000)},
+		Auth: &auth.Resolver{Exchange: auth.AnswerExchange(z.Answer)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	cases := []struct {
+		host, from string
+		code       int
+		enhanced   string
+		text       string
+		auth       string
+	}{
+		{"mx1.outlook-model.test", "notify@good.test", 250, "2.0.0", "OK", "pass pass pass"},
+		{"mx1.outlook-model.test", "notify@broken.test", 550, "5.7.515",
+			"Access denied, sending domain broken.test does not meet the required authentication level.", "fail fail fail"},
+		{"mx1.outlook-model.test", "notify@reject.test", 550, "5.7.509",
+			"Access denied, sending domain reject.test does not pass DMARC verification and has a DMARC policy of reject.", "fail fail fail"},
+		{"mx1.gmail-model.test", "notify@good.test", 250, "2.0.0", "OK", "pass pass pass"},
+		{"mx1.gmail-model.test", "notify@broken.test", 550, "5.7.26",
+			"This email has been blocked because the sender is unauthenticated.", "fail fail fail"},
+		{"mx1.gmail-model.test", "notify@reject.test", 550, "5.7.26",
+			"Unauthenticated email from reject.test is not accepted due to domain's DMARC policy.", "fail fail fail"},
+	}
+	for i, c := range cases {
+		s, _, err := r.Open(c.host, ipKnown, ipMX)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCode(t, s, "EHLO engine.mtaproof.test", 250)
+		mustCode(t, s, "MAIL FROM:<"+c.from+">", 250)
+		mustCode(t, s, "RCPT TO:<user@x.test>", 250)
+		mustCode(t, s, "DATA", 354)
+		id := fmt.Sprintf("m%08d", i+1)
+		raw := engine.BuildMessage(id, &engine.Submission{Tenant: "acme", From: c.from, To: "user@x.test",
+			Subject: "auth", Text: "Hi.\n", MsgType: engine.TypeTransactional}, time.Unix(1_800_000_000, 0))
+		signed, err := signer.Sign(c.from, raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res := s.Data(signed)
+		if res.Reply.Code != c.code || res.Reply.Enhanced != c.enhanced || res.Reply.Text != c.text {
+			t.Errorf("%s from %s: %v", c.host, c.from, res.Reply)
+		}
+		if res.Close {
+			t.Errorf("%s from %s: an auth rejection closed the connection", c.host, c.from)
+		}
+		mustCode(t, s, "QUIT", 221)
+	}
+	ends := eventsOf(readEvents(t, dir), EvDataEnd)
+	if len(ends) != len(cases) {
+		t.Fatalf("%d data_end lines", len(ends))
+	}
+	for i, e := range ends {
+		a, _ := e["auth"].(map[string]any)
+		if got := fmt.Sprintf("%v %v %v", a["spf"], a["dkim"], a["dmarc"]); got != cases[i].auth {
+			t.Errorf("data_end %d auth %v, want %s", i, e["auth"], cases[i].auth)
+		}
+		if int(e["code"].(float64)) != cases[i].code {
+			t.Errorf("data_end %d code %v", i, e["code"])
+		}
 	}
 }
 

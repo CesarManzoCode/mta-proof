@@ -133,6 +133,8 @@ def check(runs, required=REQUIRED_DOMAIN, opportunistic=OPPORTUNISTIC_DOMAIN):
 
 
 def _post(addr, key, body):
+    """POST one message, retried with the same key until a final answer;
+    returns the msg_id of the 202."""
     host, port = addr.rsplit(":", 1)
     data = json.dumps(body).encode()
     deadline = time.monotonic() + RUN_TIMEOUT_S
@@ -142,9 +144,9 @@ def _post(addr, key, body):
             conn.request("POST", "/v1/messages", body=data,
                          headers={"Content-Type": "application/json", "Idempotency-Key": key})
             resp = conn.getresponse()
-            resp.read()
+            reply = resp.read()
             if resp.status == 202:
-                return
+                return json.loads(reply)["id"]
             if resp.status != 503:
                 raise RuntimeError(f"ingest {key}: HTTP {resp.status}")
         except (OSError, http.client.HTTPException):

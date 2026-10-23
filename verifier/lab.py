@@ -180,6 +180,9 @@ class Lab:
         self.db = os.path.join(run_dir, "engine.db")
         self.control_path = os.path.join(run_dir, "control.sock")
         self.engine_config_path = os.path.join(run_dir, "engine.json")
+        if "dkim" in engine_config:
+            # mtasim writes this run's DKIM signing keys there (3.9).
+            engine_config = merge(engine_config, {"dkim": {"key_dir": os.path.join(run_dir, "dkim")}})
         with open(self.engine_config_path, "w", encoding="utf-8") as f:
             json.dump(engine_config, f, indent=2, sort_keys=True)
             f.write("\n")

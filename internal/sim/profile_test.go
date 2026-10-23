@@ -132,6 +132,14 @@ func TestProfileValidation(t *testing.T) {
 		{"auth accepted", profileJSON(`{"id": "r", "kind": "auth", "params": {"require": ["spf"],
 				"fail_response": {"code": 550, "enhanced": "5.7.26", "text": "This email has been blocked because the sender is unauthenticated."}},
 				"source": "R-GOOGLE-ERR", "assumption": false}`, ""), ""},
+		{"auth without methods", profileJSON(`{"id": "r", "kind": "auth", "params": {"require": [],
+				"fail_response": {"code": 550, "enhanced": "5.7.26", "text": "This email has been blocked because the sender is unauthenticated."}},
+				"source": "R-GOOGLE-ERR", "assumption": false}`, ""), "require lists no method"},
+		{"auth without fail_response", profileJSON(`{"id": "r", "kind": "auth", "params": {"require": ["dmarc"]},
+				"source": "R-GOOGLE-ERR", "assumption": false}`, ""), "fail_response is required"},
+		{"auth with a 4xx", profileJSON(`{"id": "r", "kind": "auth", "params": {"require": ["dmarc"],
+				"fail_response": {"code": 421, "enhanced": "4.7.0", "text": "Try again later, closing connection."}},
+				"source": "R-GOOGLE-ERR", "assumption": false}`, ""), "auth responses are 5xx"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

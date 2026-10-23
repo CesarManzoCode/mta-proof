@@ -38,6 +38,9 @@ type Config struct {
 	// TLS is the STARTTLS policy (D16); nil is opportunistic everywhere
 	// with no trusted CA.
 	TLS *TLS `json:"tls"`
+	// DKIM signs the messages of some From domains; nil or an empty
+	// key_dir signs nothing.
+	DKIM *DKIM `json:"dkim"`
 
 	pools      []*srcPool
 	tenantPool map[string]*srcPool
@@ -424,6 +427,11 @@ func (c *Config) Validate() error {
 	}
 	if c.TLS != nil {
 		if err := c.TLS.validate(); err != nil {
+			return err
+		}
+	}
+	if c.DKIM != nil {
+		if err := c.DKIM.validate(); err != nil {
 			return err
 		}
 	}
