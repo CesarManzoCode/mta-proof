@@ -3,6 +3,7 @@ bounded_duplicates, idempotency, dns_mx): each has a passing trace and the
 failing ones the contract names."""
 
 import os
+import tempfile
 import unittest
 
 from verifier import campaign, context, formats, lab
@@ -31,7 +32,8 @@ def data_end(seq, at, conn, msg_id, code=250, sha="aa"):
 
 class NoLossTest(unittest.TestCase):
     def setUp(self):
-        self.events = [ev(1, 10, "m1", "accepted"), ev(2, 11, "m2", "accepted"),
+        self.events = [ev(1, 10, "m1", "accepted", {"idempotency_key": "k1"}),
+                       ev(2, 11, "m2", "accepted", {"idempotency_key": "k2"}),
                        ev(3, 30, "m1", "delivered"), ev(4, 60, "m2", "delivered")]
         self.ingest = [{"key": "k1", "kind": "new", "status": 202, "msg_id": "m1"},
                        {"key": "k2", "kind": "new", "status": 202, "msg_id": "m2"}]
@@ -44,6 +46,48 @@ class NoLossTest(unittest.TestCase):
         ok, d, failures = no_loss.check(self.events, self.ingest, self.harness, self.receiver, PARAMS)
         self.assertTrue(ok, failures)
         self.assertEqual((d["messages"], d["kills"], d["kills_post_250"], d["lost"]), (2, 1, 1, 0))
+
+    def test_post_202_kill_without_a_202_counts(self):
+        # The original engine: no 202 during the stall.
+        harness = self.harness + [{"at_ms": 50, "action": "kill", "window": "post_202", "msg_id": None},
+                                  {"at_ms": 51, "action": "start"}]
+        ok, d, failures = no_loss.check(self.events, self.ingest, harness, self.receiver, PARAMS,
+                                        kills_post_202=1)
+        self.assertTrue(ok, failures)
+        self.assertEqual((d["kills"], d["kills_post_202"], d["answered_during_stall"]), (2, 1, 0))
+
+    def test_post_202_kill_needs_its_202_in_ingest(self):
+        harness = self.harness + [{"at_ms": 50, "action": "kill", "window": "post_202", "msg_id": "m9"}]
+        ok, _, failures = no_loss.check(self.events, self.ingest, harness, self.receiver, PARAMS,
+                                        kills_post_202=1)
+        self.assertFalse(ok)
+        self.assertIn("post_202 kill at 50: no 202 for m9 in ingest.jsonl", failures)
+
+    def test_post_202_kill_lost_message_fails(self):
+        # The mutant's case: the API answered 202 for m3, the kill came
+        # right after it and m3 never reached engine.db.
+        ingest = self.ingest + [{"key": "k3", "kind": "new", "status": 202, "msg_id": "m3"}]
+        harness = self.harness + [{"at_ms": 50, "action": "kill", "window": "post_202", "msg_id": "m3"}]
+        ok, d, failures = no_loss.check(self.events, ingest, harness, self.receiver, PARAMS,
+                                        kills_post_202=1)
+        self.assertFalse(ok)
+        self.assertEqual(d["lost_acknowledged"], 1)
+        self.assertIn("m3: answered 202 but has no accepted event", failures)
+
+    def test_msg_id_reused_after_a_lost_202_fails(self):
+        # k3 got 202 with m2 but was lost; after the restart the engine gave
+        # m2 to k2. The msg_id has an accepted event, of another key.
+        ingest = self.ingest + [{"key": "k3", "kind": "new", "status": 202, "msg_id": "m2"}]
+        ok, d, failures = no_loss.check(self.events, ingest, self.harness, self.receiver, PARAMS)
+        self.assertFalse(ok)
+        self.assertEqual(d["lost_acknowledged"], 1)
+        self.assertIn("m2: answered 202 to another key than its accepted event's", failures)
+
+    def test_too_few_post_202_kills_fail(self):
+        ok, _, failures = no_loss.check(self.events, self.ingest, self.harness, self.receiver, PARAMS,
+                                        kills_post_202=1)
+        self.assertFalse(ok)
+        self.assertIn("0 confirmed post_202 kills, fewer than kills_post_202 1", failures)
 
     def test_accepted_without_terminal_fails(self):
         events = self.events[:3]
@@ -213,6 +257,25 @@ class DNSMXTest(unittest.TestCase):
         self.assertFalse(ok)
 
 
+class LabControlPathTest(unittest.TestCase):
+    def lab_in(self, run_dir):
+        os.makedirs(run_dir)
+        return lab.Lab(run_dir, run_dir, run_dir, {}, None)
+
+    def test_short_run_dir_keeps_the_socket_in_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lb = self.lab_in(os.path.join(tmp, "run"))
+            self.assertEqual(lb.control_path, os.path.join(tmp, "run", "control.sock"))
+
+    def test_deep_run_dir_moves_the_socket_within_sun_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            deep = os.path.join(tmp, "out", "runs", "mutation", "mut_ack_before_persist", "runs", "lab-1",
+                                "campaign" + "x" * 40)
+            lb = self.lab_in(deep)
+            self.assertLessEqual(len(os.fsencode(lb.control_path)), lab.SUN_PATH_MAX)
+            self.assertFalse(lb.control_path.startswith(deep))
+
+
 class CampaignPlanTest(unittest.TestCase):
     def setUp(self):
         self.spec = campaign.load_spec(os.path.join(ROOT, "lab", "campaign.json"))
@@ -233,6 +296,7 @@ class CampaignPlanTest(unittest.TestCase):
         self.assertEqual(len(kills), self.params["campaign_kills"])
         self.assertEqual(sum(f["window"] == "post_250" for f in kills),
                          self.params["campaign_kills_post_250"])
+        self.assertEqual(sum(f["window"] == "post_202" for f in kills), self.spec["kills_post_202"])
         self.assertEqual(sum(f["kind"] == "switch" for f in p["faults"]), 1)
         self.assertEqual(sum(f["kind"] == "cut" for f in p["faults"]), self.spec["cuts"]["count"])
         self.assertTrue(p["replays"] and p["conflicts"] and not p["replays"] & p["conflicts"])

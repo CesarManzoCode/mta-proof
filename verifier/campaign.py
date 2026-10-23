@@ -1,7 +1,7 @@
 """The real kill campaign (contract 3.12, 4.4): seeded load over HTTP with
 idempotent resends and conflicts, kill -9 at seeded instants (some in the
-post_250 window), connection cuts and a hot profile switch; then the engine
-is restarted and left to drain.
+post_250 window and some right after a 202, post_202), connection cuts and
+a hot profile switch; then the engine is restarted and left to drain.
 
 Writes, in the run directory of 3.6: receiver.jsonl and messages/ (mtasim),
 engine.db (mtaengine), harness.jsonl (3.5), ingest.jsonl (3.5) and
@@ -13,6 +13,7 @@ import json
 import os
 import random
 import signal
+import sqlite3
 import threading
 import time
 
@@ -24,10 +25,14 @@ RETRY_PAUSE_S = 0.05
 HOLD_TIMEOUT_S = 30
 # The 250 released to a stopped engine needs a moment to reach its socket.
 RELEASE_SETTLE_S = 0.2
+# post_202 (supuesto): each stall of the engine's commit lasts this long,
+# and a kill stalls at most this many times waiting for a 202.
+POST_202_HOLD_S = 0.1
+POST_202_STALLS = 20
 
 SPEC_KEYS = ("name", "description", "engine", "tenants", "domains", "rate_per_s", "workers",
              "replays", "conflicts", "cuts", "profile_switch", "fault_span", "kill_jitter_s",
-             "drain_timeout_s")
+             "kills_post_202", "drain_timeout_s")
 
 
 def load_spec(path):
@@ -48,7 +53,7 @@ def plan(spec, params, seed):
     Draw order (random.Random seeded with "campaign:<seed>"): per message its
     tenant and domain; then the replayed and the conflicting messages; then
     the fault thresholds (in accepted originals), which kills are post_250,
-    the jitter of each kill, the cut hosts and the switch threshold."""
+    which of the others are post_202, the jitter of each kill, the cut hosts and the switch threshold."""
     rng = random.Random(f"campaign:{seed}")
     n = params["campaign_messages"]
     msgs = []
@@ -69,10 +74,11 @@ def plan(spec, params, seed):
     lo, hi = spec["fault_span"]
     kills = params["campaign_kills"]
     post = set(rng.sample(range(kills), params["campaign_kills_post_250"]))
+    post202 = set(rng.sample([k for k in range(kills) if k not in post], spec["kills_post_202"]))
     faults = []
     for k, at in enumerate(sorted(rng.uniform(lo, hi) for _ in range(kills))):
-        faults.append({"at": int(at * n), "kind": "kill",
-                       "window": "post_250" if k in post else "random",
+        window = "post_250" if k in post else "post_202" if k in post202 else "random"
+        faults.append({"at": int(at * n), "kind": "kill", "window": window,
                        "jitter_s": round(rng.uniform(0, spec["kill_jitter_s"]), 3)})
     for _ in range(spec["cuts"]["count"]):
         faults.append({"at": int(rng.uniform(lo, hi) * n), "kind": "cut",
@@ -97,6 +103,7 @@ class Ingest:
         self.acked = 0  # originals with a final answer
         self.errors = []
         self.stop = False
+        self.armed = None  # post_202: called with the msg_id of the next new 202
 
     def log(self, rec):
         with self.lock:
@@ -131,6 +138,8 @@ class Ingest:
                 msg_id = json.loads(payload).get("id")
             except ValueError:
                 msg_id = None
+            if status == 202 and kind == "new" and not replayed:
+                self.fire(msg_id)
             rec = {"at_ms": now_ms(), "i": i, "kind": kind, "key": key, "status": status,
                    "msg_id": msg_id, "replayed": replayed, "tries": tries}
             self.log(rec)
@@ -138,6 +147,13 @@ class Ingest:
                 self.errors.append(f"{kind} {key}: HTTP {status} {payload[:200]!r}")
             return rec
         return None
+
+    def fire(self, msg_id):
+        """Runs the armed post_202 kill, once, as soon as a 202 arrives."""
+        with self.lock:
+            cb, self.armed = self.armed, None
+        if cb is not None:
+            cb(msg_id)
 
     def close(self):
         self.f.close()
@@ -178,6 +194,7 @@ class Faults:
         self.lab, self.h, self.ing, self.faults = lab, harness, ingest, faults
         self.kills = 0
         self.kills_post_250 = 0
+        self.kills_post_202 = 0
         self.errors = []
         self.restart_ms = []
         self.pending_back = []
@@ -221,6 +238,47 @@ class Faults:
             ctl.close()
         self.restart()
 
+    def kill_post_202(self, f):
+        """kill -9 while a group commit is stalled (4.4, k3-01). The harness
+        takes the write lock of engine.db (BEGIN IMMEDIATE, never writes), so
+        no commit of the engine can finish, and waits up to POST_202_HOLD_S
+        for a 202 to a new message; without one it lets the stalled group
+        commit and stalls again, up to POST_202_STALLS times. Then it kills
+        the engine with the lock still held. The original engine answers
+        only after its commit, so no 202 arrives during a stall; one that
+        does (mut_ack_before_persist) is a message the kill loses."""
+        time.sleep(f["jitter_s"])
+        pid = self.lab.engine.pid
+        got = {}
+        seen = threading.Event()
+
+        def on_202(msg_id):
+            got["msg_id"] = msg_id
+            seen.set()
+
+        lock = sqlite3.connect(self.lab.db, isolation_level=None, timeout=10)
+        stalls = 0
+        try:
+            while True:
+                lock.execute("BEGIN IMMEDIATE")
+                stalls += 1
+                self.ing.armed = on_202
+                seen.wait(POST_202_HOLD_S)
+                with self.ing.lock:
+                    self.ing.armed = None
+                if seen.is_set() or stalls >= POST_202_STALLS:
+                    break
+                lock.execute("ROLLBACK")
+            self.lab.engine.kill9()
+        finally:
+            if lock.in_transaction:
+                lock.execute("ROLLBACK")
+            lock.close()
+        self.h.log("kill", pid=pid, window="post_202", msg_id=got.get("msg_id"), stalls=stalls)
+        self.kills += 1
+        self.kills_post_202 += 1
+        self.restart()
+
     def cut(self, host):
         ctl = self.lab.control()
         try:
@@ -256,7 +314,8 @@ class Faults:
                 return
             self.due_backs()
             if f["kind"] == "kill":
-                (self.kill_post_250 if f["window"] == "post_250" else self.kill_random)(f)
+                {"post_250": self.kill_post_250, "post_202": self.kill_post_202}.get(
+                    f["window"], self.kill_random)(f)
             elif f["kind"] == "cut":
                 self.cut(f["host"])
             elif f["kind"] == "switch":
@@ -343,6 +402,7 @@ def run(ctx, seed, run_dir, spec_path=None):
         ingest.close()
     summary.update({
         "kills": faults.kills, "kills_post_250": faults.kills_post_250,
+        "kills_post_202": faults.kills_post_202,
         "restart_ms_max": max(faults.restart_ms, default=None),
         "errors": fault_err + faults.errors + ingest.errors,
         "duration_s": round(time.monotonic() - t0, 3),

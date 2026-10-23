@@ -27,7 +27,9 @@ systemd-run --user --scope --quiet -- unshare --user --map-root-user --net --mou
 
 Dentro, el verificador levanta `lo`, corre cada propiedad implementada, escribe `out/report.json` e imprime el veredicto de cada una. Sale con 0 solo si todas pasan; si alguna falla, sale con 1 e imprime cuáles y por qué. Para correr solo algunas: `python3 -m verifier verify --out out --only determinism,classification` (las de modo simulado no necesitan el espacio de nombres).
 
-`make check` corre formato, `go vet` y las pruebas unitarias de Go y del verificador; es lo que corre el CI.
+`make build` compila además los seis mutantes del contrato (4.3), cada uno con su etiqueta de compilación, en `bin/mut/<nombre>/`. La propiedad `mutation_detection` vuelve a correr la suite con los binarios originales y con los de cada mutante, y deja cada reporte en `out/runs/mutation/<nombre>/report.json`; pasa solo si el original pasa y cada mutante hace fallar la suite.
+
+`make check` corre formato, `go vet` y las pruebas unitarias de Go (también las de cada mutante con su etiqueta) y del verificador; es lo que corre el CI.
 
 ### Cómo leer `out/report.json`
 

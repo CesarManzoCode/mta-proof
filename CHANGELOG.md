@@ -1,5 +1,34 @@
 # Changelog
 
+## [K3] - sin cerrar
+
+### Añadido
+
+- Seis mutantes del motor (contrato 4.3), uno por etiqueta de compilación: `mut_no_backoff` (todo reintento espera el primer intervalo del calendario), `mut_retry_permanent` (difiere los rechazos 5xx), `mut_ignore_conn_limit` (no aplica el límite de mensajes por conexión aprendido), `mut_ack_before_persist` (el ingreso responde 202 antes del commit de su grupo), `mut_shared_queue` (una sola cola para todos los destinos) y `mut_exceed_warmup` (ignora el tope horario del plan). Cada uno es un archivo `internal/engine/mut_<nombre>.go` que reemplaza una función gancho cuya versión original vive en un `hook_*.go` con la etiqueta negada; `Mutant` nombra el mutante y `mtaengine` y `mtadst` lo escriben en su registro al arrancar.
+- `make build` compila, además de `bin/`, todos los binarios de `cmd/` con cada etiqueta en `bin/mut/<nombre>/`. `make check` corre también `go vet` y las pruebas `TestMutant*` de `internal/engine` con cada etiqueta.
+- Pruebas de Go por mutante (`mut_<nombre>_test.go`, con su etiqueta) sobre los escenarios de `mutant_scenarios_test.go`, y `TestMutantNone`, que comprueba los mismos escenarios con el motor original.
+- Propiedad `mutation_detection`: corre como subproceso la suite completa (sin ella misma ni `external_validation`) con `bin/` y con cada `bin/mut/<nombre>/`, deja cada reporte y su salida en `out/runs/mutation/<nombre>/` y pasa solo si el original sale con 0 y cada mutante con otro código y con su propiedad de 4.3 fallando. Falla también si los binarios originales contienen el nombre de algún mutante o si los de un mutante no contienen el suyo.
+- Muerte `post_202` en la campaña real (contrato 4.4): el orquestador detiene el commit del motor tomando el candado de escritura de `engine.db` sin escribir, espera un 202 y mata el motor con el commit aún detenido. 10 de las 30 muertes son de este tipo (`kills_post_202` en `lab/campaign.json`).
+
+### Corregido
+
+- El socket de control de `mtasim` va a un directorio temporal cuando `<corrida>/control.sock` no cabe en los 108 bytes de `sun_path`: bajo `out/runs/mutation/<nombre>/runs/lab-1/campaign/` la ruta medía 110 a 123 bytes y `mtasim` no arrancaba (`bind: invalid argument`).
+
+### Decisiones
+
+- Los mutantes se compilan también en `mtadst`, no solo en `mtaengine` como decía 4.3: `backoff_expiry`, `destination_isolation` e `ip_warmup` son simuladas y corren el motor dentro de `mtadst`.
+- `mut_retry_permanent` cambia la decisión de reintentar, no el clasificador: el evento `classified` sigue `permanent`, así la falla es la del enunciado (tratar el 5xx como transitorio) y no un corpus mal clasificado.
+- 10 de las 30 muertes de la campaña pasan a ser `post_202`; el total y las 5 `post_250` no cambian. Medido (semilla 1): con las 30 muertes de K1, `mut_ack_before_persist` perdió 0 mensajes contestados y `no_loss` pasó; matar al recibir el 202, sin detener el commit, perdió 14 de 40 con `mtaengine serve` recién arrancado, 2 de 30 tras 50 commits y 0 de 10 en la campaña, porque el commit termina antes de que el orquestador reaccione. Con el commit detenido: 20 de 20 en aislamiento con el mutante y 0 de 20 con el original; en la campaña, 10 de 10 muertes con un 202 recibido durante la detención con el mutante y 0 de 10 con el original.
+- `no_loss` exige que el `accepted` del `msg_id` de un 202 lleve la `Idempotency-Key` de esa petición. Medido: tras perder un mensaje contestado, el motor da el mismo `msg_id` al siguiente, y las 10 pérdidas de `mut_ack_before_persist` tenían su `msg_id` reutilizado; el cruce solo por `msg_id` contaba 0 perdidos y la propiedad caía solo por la cuenta de aceptados (9 990 de 10 000).
+- `rfc5322_format` no entra en `out/runs/mutation/`: son las suites internas, cada una con su propio `rfc5322_format`.
+- La suite completa corre por cada mutante; no se redujo nada. Medido en la verificación de cierre: `make verify` 3 180 s (342,6 s en K1 y 393,9 s en K2) y `memory.peak` 4 560 240 640 bytes, bajo el límite de 8 GiB; cada suite interna, de 388 a 450 s.
+- El refactor del programador para `queueOf` (el destino sale de la cabeza de la cola, no de la clave de la cola) deja al motor original igual: misma `trace.sha256` antes y después en `isolation`, `tenant-pause`, `backoff` y `determinism` (semilla 1).
+
+### Verificación
+
+- `make check` sale con 0: los paquetes Go, las pruebas `TestMutant*` con cada una de las seis etiquetas y las 144 pruebas del verificador.
+- `make verify` sale con 0 con las diecinueve propiedades. En `mutation_detection` el original sale con 0 y cada mutante con 1: `mut_no_backoff` hace caer `backoff_expiry`; `mut_retry_permanent`, `outbound_auth` y `tenant_pause`; `mut_ignore_conn_limit`, `receiver_limits` (120 violaciones contadas en `limits`); `mut_ack_before_persist`, `no_loss` (10 mensajes contestados y perdidos) e `idempotency`; `mut_shared_queue`, `destination_isolation` y `tenant_pause`; `mut_exceed_warmup`, `ip_warmup`. Las cifras son de la verificación de cierre de este mini sprint, ejecutada sobre el árbol de trabajo antes del commit.
+
 ## [K2] - 2026-10-23
 
 ### Añadido

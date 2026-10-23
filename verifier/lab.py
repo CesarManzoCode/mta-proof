@@ -12,12 +12,15 @@ import signal
 import socket
 import sqlite3
 import subprocess
+import tempfile
 import threading
 import time
 
 READY_TIMEOUT_S = 30
 TERMINAL = ("delivered", "bounced", "expired", "suppressed")
 RESOLV_CONF = "/etc/resolv.conf"
+# A Unix socket path holds at most 107 bytes plus its NUL (sun_path, unix(7)).
+SUN_PATH_MAX = 107
 
 
 def now_ms():
@@ -179,6 +182,12 @@ class Lab:
         self.run_dir = run_dir
         self.db = os.path.join(run_dir, "engine.db")
         self.control_path = os.path.join(run_dir, "control.sock")
+        self._sock_dir = None
+        if len(os.fsencode(self.control_path)) > SUN_PATH_MAX:
+            # A deep run_dir (out/runs/mutation/<name>/runs/...) does not fit:
+            # the socket goes to a short temporary directory, removed with it.
+            self._sock_dir = tempfile.TemporaryDirectory(prefix="mtaproof-")
+            self.control_path = os.path.join(self._sock_dir.name, "control.sock")
         self.engine_config_path = os.path.join(run_dir, "engine.json")
         if "dkim" in engine_config:
             # mtasim writes this run's DKIM signing keys there (3.9).

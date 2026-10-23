@@ -25,6 +25,9 @@ func main() {
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(2)
 	}
+	if engine.Mutant != "" {
+		log.Printf("mutant %s (contract 4.3)", engine.Mutant)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	ready := func(a net.Addr) {

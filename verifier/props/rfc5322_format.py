@@ -29,10 +29,17 @@ def defects_of(data):
     return None
 
 
+# out/runs/mutation holds the inner suites of mutation_detection, each with
+# its own rfc5322_format; their captures are not this run's.
+SKIP = ("mutation",)
+
+
 def captured(runs_dir):
-    """Paths of the captured .eml files under runs_dir, sorted."""
+    """Paths of the captured .eml files under runs_dir, sorted, outside SKIP."""
     out = []
-    for dirpath, _, files in os.walk(runs_dir):
+    for dirpath, dirs, files in os.walk(runs_dir):
+        if os.path.normpath(dirpath) == os.path.normpath(runs_dir):
+            dirs[:] = [d for d in dirs if d not in SKIP]
         if os.path.basename(dirpath) != "messages":
             continue
         out += [os.path.join(dirpath, f) for f in files if f.endswith(".eml")]

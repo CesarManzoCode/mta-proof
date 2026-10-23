@@ -32,8 +32,10 @@ type Runner struct {
 }
 
 type op struct {
-	fn    func(*Core) any
-	reply chan result
+	fn     func(*Core) any
+	reply  chan result
+	ingest bool // an Ingest, whose reply is the API's 202
+	acked  bool // already replied before the commit (ackEarly)
 }
 
 type result struct {
@@ -75,6 +77,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		results := make([]any, len(batch))
 		for i, o := range batch {
 			results[i] = o.fn(r.core)
+			o.acked = ackEarly(o, results[i])
 		}
 		err := r.st.Apply(r.core.TakeWrites())
 		r.mu.Lock()
@@ -85,6 +88,9 @@ func (r *Runner) Run(ctx context.Context) error {
 		}
 		r.mu.Unlock()
 		for i, o := range batch {
+			if o.acked {
+				continue
+			}
 			if err != nil {
 				o.reply <- result{err: ErrStopped}
 			} else {
@@ -100,7 +106,10 @@ func (r *Runner) Run(ctx context.Context) error {
 // Do runs fn on the core and returns its value once fn's writes are
 // committed.
 func (r *Runner) Do(ctx context.Context, fn func(*Core) any) (any, error) {
-	o := &op{fn: fn, reply: make(chan result, 1)}
+	return r.do(ctx, &op{fn: fn, reply: make(chan result, 1)})
+}
+
+func (r *Runner) do(ctx context.Context, o *op) (any, error) {
 	select {
 	case r.ops <- o:
 	case <-r.done:
@@ -124,7 +133,7 @@ func (r *Runner) Do(ctx context.Context, fn func(*Core) any) (any, error) {
 
 // Ingest admits a validated submission through the core.
 func (r *Runner) Ingest(ctx context.Context, s *Submission, key string) (IngestResult, error) {
-	v, err := r.Do(ctx, func(c *Core) any { return c.Ingest(s, key) })
+	v, err := r.do(ctx, &op{fn: func(c *Core) any { return c.Ingest(s, key) }, reply: make(chan result, 1), ingest: true})
 	if err != nil {
 		return IngestResult{}, err
 	}

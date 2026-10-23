@@ -33,7 +33,7 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(cli.select("resources,classification"), ["classification", "resources"])
         self.assertEqual(cli.select(None), list(cli.PROPERTIES))
         with self.assertRaises(SystemExit):
-            cli.select("mutation_detection")
+            cli.select("external_validation")
 
 
 class ParamsTest(unittest.TestCase):

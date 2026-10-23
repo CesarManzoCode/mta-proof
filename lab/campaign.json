@@ -1,6 +1,6 @@
 {
   "name": "campaign",
-  "description": "Campaña real de muertes forzadas (contrato 3.12 y 4.4). campaign_messages mensajes nuevos por HTTP a rate_per_s, cada uno con su Idempotency-Key y reenviado con la misma clave hasta tener respuesta final; replays de ellos se reenvían iguales tras su 202 y conflicts con otro asunto. Destinos: baseline.test casi todo, los tres modelos de proveedor por debajo de sus tasas supuestas, fallback.test (su MX preferido no escucha) y nullmx.test (null MX). Fallas entre las fracciones fault_span de los mensajes aceptados: campaign_kills kill -9 (campaign_kills_post_250 de ellos con el protocolo post_250), cortes de conexión y un cambio en caliente de mx1.baseline.test a always-defer durante hold_s segundos. El motor usa lab/engine.json con campaign_retry_policy.",
+  "description": "Campaña real de muertes forzadas (contrato 3.12 y 4.4). campaign_messages mensajes nuevos por HTTP a rate_per_s, cada uno con su Idempotency-Key y reenviado con la misma clave hasta tener respuesta final; replays de ellos se reenvían iguales tras su 202 y conflicts con otro asunto. Destinos: baseline.test casi todo, los tres modelos de proveedor por debajo de sus tasas supuestas, fallback.test (su MX preferido no escucha) y nullmx.test (null MX). Fallas entre las fracciones fault_span de los mensajes aceptados: campaign_kills kill -9 (campaign_kills_post_250 de ellos con el protocolo post_250 y kills_post_202 de los demás justo al recibir el 202 de un mensaje nuevo), cortes de conexión y un cambio en caliente de mx1.baseline.test a always-defer durante hold_s segundos. El motor usa lab/engine.json con campaign_retry_policy.",
   "engine": {"base": "lab/engine.json", "set": {}},
   "tenants": [
     {"name": "acme", "from": "notify@baseline.test", "weight": 3},
@@ -22,5 +22,6 @@
   "profile_switch": {"host": "mx1.baseline.test", "profile": "always-defer", "back": "baseline", "hold_s": 5},
   "fault_span": [0.02, 0.97],
   "kill_jitter_s": 0.5,
+  "kills_post_202": 10,
   "drain_timeout_s": 900
 }

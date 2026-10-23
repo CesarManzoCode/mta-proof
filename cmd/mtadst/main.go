@@ -11,6 +11,7 @@ import (
 	"os"
 
 	"github.com/CesarManzoCode/mta-proof/internal/dst"
+	"github.com/CesarManzoCode/mta-proof/internal/engine"
 )
 
 const usage = `usage:
@@ -21,6 +22,9 @@ func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(2)
+	}
+	if engine.Mutant != "" {
+		log.Printf("mutant %s (contract 4.3)", engine.Mutant)
 	}
 	switch os.Args[1] {
 	case "run":

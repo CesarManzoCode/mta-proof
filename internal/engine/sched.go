@@ -165,7 +165,7 @@ func (x scope) maxConns() int {
 	return minPositive(x.lim.Connections, x.learnedField(func(l *learnedLimits) int { return l.conns }))
 }
 func (x scope) maxMsgs() int {
-	return minPositive(x.lim.MsgsPerConn, x.learnedField(func(l *learnedLimits) int { return l.msgs }))
+	return minPositive(x.lim.MsgsPerConn, learnedMsgsPerConn(x))
 }
 
 func (x scope) learnedField(f func(*learnedLimits) int) int {
@@ -234,7 +234,7 @@ func (c *Core) SetDelivery(cfg *Config, rng *rand.Rand) {
 }
 
 func (c *Core) enqueue(m *store.Message) {
-	k := queueKey{m.Tenant, m.Domain}
+	k := queueOf(queueKey{m.Tenant, m.Domain})
 	q := c.s.queues[k]
 	if q == nil {
 		q = &queue{key: k}
@@ -455,11 +455,17 @@ type served struct {
 // connection, within the limits.
 func (c *Core) serve(q *queue, cs *connState, now int64) served {
 	s := c.s
-	if c.tenantPaused(q.key.tenant) {
-		return served{} // resumeTenants wakes the dispatch when the pause ends
-	}
 	m := c.head(q)
 	if m == nil {
+		return served{}
+	}
+	// dk is the destination of the head; it is q's key unless queues are
+	// shared (queueOf).
+	dk := queueKey{m.Tenant, m.Domain}
+	if c.tenantPaused(dk.tenant) {
+		return served{} // resumeTenants wakes the dispatch when the pause ends
+	}
+	if cs != nil && cs.q != dk {
 		return served{}
 	}
 	if m.NextAtMs > now {
@@ -510,7 +516,7 @@ func (c *Core) serve(q *queue, cs *connState, now int64) served {
 	}
 	var wake int64
 	for _, idle := range c.sortedConns() {
-		if idle.q != q.key || idle.state != connIdle || !c.usable(idle) {
+		if idle.q != dk || idle.state != connIdle || !c.usable(idle) {
 			continue
 		}
 		w := c.capWait(idle.src, now)
@@ -526,7 +532,7 @@ func (c *Core) serve(q *queue, cs *connState, now int64) served {
 		q.pop()
 		return served{acts: []Action{c.assign(idle, m, now)}, progress: true}
 	}
-	src, sc, w := c.pickSrc(q.key, rt.provider, now)
+	src, sc, w := c.pickSrc(dk, rt.provider, now)
 	if !src.IsValid() {
 		if w > 0 && (wake == 0 || w < wake) {
 			wake = w
@@ -535,15 +541,15 @@ func (c *Core) serve(q *queue, cs *connState, now int64) served {
 	}
 	q.pop()
 	s.nextConn++
-	nc := &connState{id: s.nextConn, q: q.key, src: src, provider: rt.provider,
-		lkey: learnKey(q.key.domain, rt.provider, src), keys: scopeKeys(sc), mx: rt.mx,
+	nc := &connState{id: s.nextConn, q: dk, src: src, provider: rt.provider,
+		lkey: learnKey(dk.domain, rt.provider, src), keys: scopeKeys(sc), mx: rt.mx,
 		state: connOpening, current: m.ID}
 	s.conns[nc.id] = nc
 	c.StartAttempt(m.ID, Route{Provider: rt.provider, SrcIP: src.String()})
 	c.recordStart(nc.keys, now)
 	c.chargeStart(m.ID, src, now)
 	return served{progress: true, acts: []Action{{Kind: ActOpen, Conn: nc.id,
-		Open: &OpenSpec{Src: src, Port: s.cfg.SMTPPort, MX: rt.mx, TLS: s.cfg.tlsPolicy(q.key.domain, rt.provider)}}}}
+		Open: &OpenSpec{Src: src, Port: s.cfg.SMTPPort, MX: rt.mx, TLS: s.cfg.tlsPolicy(dk.domain, rt.provider)}}}}
 }
 
 // pickSrc chooses the source address of a new connection of queue k
@@ -706,6 +712,7 @@ func (c *Core) capWait(src netip.Addr, now int64) int64 {
 		return 0
 	}
 	daily, hourly := a.caps(c.s.cfg.Warmup.OriginMs, now)
+	hourly = hourlyCap(hourly)
 	dayN, hourN := c.used(src, now)
 	var w int64
 	if daily > 0 && dayN >= daily {
@@ -721,6 +728,7 @@ func (c *Core) capWait(src netip.Addr, now int64) int64 {
 // daily and hourly ones, 1 for an address without caps.
 func (c *Core) capFree(a *srcIP, now int64) float64 {
 	daily, hourly := a.caps(c.s.cfg.Warmup.OriginMs, now)
+	hourly = hourlyCap(hourly)
 	dayN, hourN := c.used(a.addr, now)
 	free := 1.0
 	if daily > 0 {
@@ -760,11 +768,8 @@ func (c *Core) Resolved(domain string, res Resolution) {
 	case ResolvedTemporary:
 		delete(s.routes, domain)
 		for _, k := range s.qkeys {
-			if k.domain != domain {
-				continue
-			}
 			q := s.queues[k]
-			for m := c.head(q); m != nil && m.NextAtMs <= now; m = c.head(q) {
+			for m := c.head(q); m != nil && m.Domain == domain && m.NextAtMs <= now; m = c.head(q) {
 				q.pop()
 				c.deferQueued(m, decDNSTemp, map[string]any{"dns": res.Err})
 			}
@@ -888,7 +893,7 @@ func (c *Core) Sent(id int64, msgID string, tr TxResult) []Action {
 		return []Action{{Kind: ActClose, Conn: id}}
 	}
 	cs.state, cs.idleSince = connIdle, now
-	q := s.queues[cs.q]
+	q := s.queues[queueOf(cs.q)]
 	for {
 		r := c.serve(q, cs, now)
 		if len(r.acts) > 0 || !r.progress {
@@ -908,7 +913,7 @@ func (c *Core) Closed(id int64) { delete(c.s.conns, id) }
 func (c *Core) replyFailure(cs *connState, m *store.Message, r Route, rep Reply, stage string) bool {
 	d, _ := c.Classify(m.ID, r, rep.Code, rep.Enhanced, rep.Text)
 	det := map[string]any{"conn": cs.id, "stage": stage}
-	if d.Class == classify.Permanent {
+	if bounces(d, rep) {
 		if d.Subtype == classify.NoEmail {
 			c.suppress(m, d.Subtype)
 			det["suppressed"] = true
@@ -938,7 +943,7 @@ func (c *Core) deferInflight(m *store.Message, r Route, rep *Reply, d classify.D
 	o.NextAtMs = now
 	if counted {
 		k := m.Retries + 1
-		next := now + c.s.cfg.Retry.DelayMs(k)
+		next := now + retryDelayMs(c.s.cfg.Retry, k)
 		if next > m.AcceptedAtMs+c.s.cfg.Retry.LifetimeMs() {
 			o.Kind = KindExpired
 			c.FinishAttempt(m.ID, o)
@@ -955,7 +960,7 @@ func (c *Core) deferInflight(m *store.Message, r Route, rep *Reply, d classify.D
 func (c *Core) deferQueued(m *store.Message, d classify.Decision, det map[string]any) {
 	now := c.nowMs()
 	k := m.Retries + 1
-	next := now + c.s.cfg.Retry.DelayMs(k)
+	next := now + retryDelayMs(c.s.cfg.Retry, k)
 	ev := &store.Event{Class: d.Class, Subtype: d.Subtype, RuleID: d.RuleID, Attempt: m.Attempts, Detail: detail(det)}
 	if next > m.AcceptedAtMs+c.s.cfg.Retry.LifetimeMs() {
 		ev.Kind = KindExpired

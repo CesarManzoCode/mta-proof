@@ -1,16 +1,27 @@
 .PHONY: build check verify
 
-# build: binarios de cmd/ en bin/. Los mutantes (bin/mut/) llegan con k3.
+# Mutantes del contrato 4.3: una etiqueta de compilación cada uno.
+MUTANTS := mut_no_backoff mut_retry_permanent mut_ignore_conn_limit mut_ack_before_persist mut_shared_queue mut_exceed_warmup
+
+# build: binarios de cmd/ en bin/ y, por mutante, los mismos con su etiqueta en
+# bin/mut/<nombre>/, para que el verificador corra la suite con --bin bin/mut/<nombre>.
 build:
 	@mkdir -p bin
 	go build -o bin/ ./cmd/...
+	@for m in $(MUTANTS); do \
+		mkdir -p bin/mut/$$m && go build -tags $$m -o bin/mut/$$m/ ./cmd/... || exit 1; \
+	done
 
 # check: formato, vet y pruebas unitarias; no necesita red ni espacios de nombres. Lo corre el CI.
 check:
 	@if [ -f go.mod ]; then \
 		unformatted="$$(gofmt -l .)"; \
 		if [ -n "$$unformatted" ]; then echo "gofmt: $$unformatted"; exit 1; fi; \
-		go vet ./... && go test -count=1 ./...; \
+		go vet ./... && go test -count=1 ./... || exit 1; \
+		for m in $(MUTANTS); do \
+			go vet -tags $$m ./internal/engine && \
+			go test -count=1 -tags $$m -run '^TestMutant' ./internal/engine || exit 1; \
+		done; \
 	else echo "check: no Go module yet"; fi
 	@if [ -d verifier ]; then python3 -m unittest discover -s verifier -t . -p 'test_*.py'; \
 	else echo "check: no verifier yet"; fi
