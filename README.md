@@ -19,16 +19,46 @@ make deps     # una vez, con Internet: módulos Go y Haraka
 make verify   # toda la verificación, sin Internet
 ```
 
-`make verify` sale con 0 solo si todas las propiedades pasan; si alguna falla, sale con otro código e imprime cuál. Escribe `out/report.json`: una entrada por propiedad con nombre, veredicto, semilla y ruta de la traza que la respalda, más la memoria máxima y la duración de la suite.
+`make verify` compila `bin/` (`make build`) y luego corre, dentro de un scope de systemd de usuario y de un espacio de nombres de usuario, red y montaje propio:
 
-`make check` corre formato, `go vet` y las pruebas unitarias; es lo que corre el CI.
+```sh
+systemd-run --user --scope --quiet -- unshare --user --map-root-user --net --mount python3 -m verifier verify --out out
+```
+
+Dentro, el verificador levanta `lo`, corre cada propiedad implementada, escribe `out/report.json` e imprime el veredicto de cada una. Sale con 0 solo si todas pasan; si alguna falla, sale con 1 e imprime cuáles y por qué. Para correr solo algunas: `python3 -m verifier verify --out out --only determinism,classification` (las de modo simulado no necesitan el espacio de nombres).
+
+`make check` corre formato, `go vet` y las pruebas unitarias de Go y del verificador; es lo que corre el CI.
+
+### Cómo leer `out/report.json`
+
+```json
+{
+  "format": "mta-proof-report/1",
+  "git_head": "<commit verificado>",
+  "started_at": "2026-10-23T16:37:05+00:00",
+  "duration_s": 7.1,
+  "max_memory_bytes": 215048192,
+  "memory_limit_bytes": 8589934592,
+  "verdict": "pass",
+  "properties": [
+    {"name": "backoff_expiry", "verdict": "pass", "seed": 1, "trace": "out/runs/backoff-1",
+     "details": {"messages": 3, "max_interval_s": 10800.0, "expired": 3, "dsn_null_sender": 3}}
+  ]
+}
+```
+
+- `verdict` global es `pass` solo si todas las propiedades pasan. Cada propiedad tiene su `verdict`, la `seed` de la corrida (`null` si no usa semilla) y `trace`: el directorio con los archivos crudos sobre los que se decidió (`receiver.jsonl`, `engine.db`, `events.jsonl`, `trace.sha256`, `messages/`), para repetir la decisión a mano.
+- `details` trae las cifras que respaldan el veredicto (claves en la sección 4.1 del contrato). Si la propiedad falla, `details.failures` lista los motivos.
+- `max_memory_bytes` es el `memory.peak` del scope de toda la corrida y `duration_s` su duración; la propiedad `resources` falla si la memoria supera `memory_limit_bytes`.
+
+Propiedades implementadas hoy: `profile_sources`, `classification`, `backoff_expiry`, `receiver_limits` (en modo simulado), `determinism` y `resources`. Qué decide cada una: sección 4 de [vault/CONTRACT.md](vault/CONTRACT.md).
 
 ## Estado
 
 | Fase | Contenido | Estado |
 | --- | --- | --- |
 | K0 | Contrato, investigación y plan | hecho |
-| K1 | Simulador, motor, clasificación, backoff, DNS, determinismo, no pérdida bajo `kill -9` | pendiente |
+| K1 | Simulador, motor, clasificación, backoff, DNS, determinismo, no pérdida bajo `kill -9` | en curso |
 | K2 | Pools y calentamiento, tenants, aislamiento, TLS, autenticación, depuración | pendiente |
 | K3 | Mutantes, validación externa con Haraka, licencias | pendiente |
 

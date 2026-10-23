@@ -1,0 +1,17 @@
+{
+  "campaign_messages": 10000,
+  "campaign_kills": 30,
+  "campaign_kills_post_250": 5,
+  "retry_policy": {"initial_s": 1800, "factor": 2, "max_s": 10800, "lifetime_s": 432000},
+  "campaign_retry_policy": {"initial_s": 1, "factor": 2, "max_s": 8, "lifetime_s": 600},
+  "isolation_margin": 1.10,
+  "tenant_bounce_threshold": 0.04,
+  "tenant_window": 200,
+  "tenant_pause_bound_s": 60,
+  "warmup_plan": {
+    "daily": [150, 250, 400, 700, 1000, 1500, 2000],
+    "hourly": [null, null, null, 50, 75, 100, 150]
+  },
+  "warmup_share_tolerance": 0.05,
+  "memory_limit_bytes": 8589934592
+}

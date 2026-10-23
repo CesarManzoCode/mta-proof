@@ -73,6 +73,7 @@ Arch Linux, kernel 7.2.10, 12 CPU, 14 GiB visibles, disco `/home` SSD.
 | `mtadst run` del escenario `backoff` (semilla 1) en `/home` | 3 mensajes, 4,9 días virtuales (`virtual_ms` 423 315 474), 41 reintentos por mensaje, expiración y DSN: 63 ms de reloj | 2.2, D05 |
 | Diez corridas `mtadst run` por escenario (`determinism` y `backoff`, semilla 7) con `GOMAXPROCS` 1, 8 y 15, y tres de `limits` (semilla 3) con 5, 10 y 15 | un solo `trace.sha256` por escenario | 2.2, D05 |
 | `events.jsonl` de `determinism` contra `json.dumps(dict(fila), sort_keys=True, separators=(",", ":"))` de Python 3.14.8 sobre `engine.db` | idénticos byte a byte (también lo comprueba `TestEventsMatchPython`) | 3.6 |
+| `make verify` de k1-06 (seis propiedades: `profile_sources`, `classification`, `backoff_expiry`, `receiver_limits`, `determinism`, `resources`), 2026-10-23, kernel 7.2.11 | todas `pass`; `memory.peak` del scope 215 048 192 bytes; 7,1 s. Dentro de `unshare --net`, `/sys/class/net` lista las interfaces del anfitrión (`docker0`, `enp5s0`, `lo`), así que `lo` se sube con `ioctl` | 4, D17 |
 
 ## Huecos que siguen abiertos
 

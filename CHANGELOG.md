@@ -18,6 +18,9 @@
 - El `Stepper` del motor pasa a ser una cola de eventos ordenada por (tiempo virtual, secuencia); la conversación de cada conexión corre como corrutina y la latencia del perfil avanza el reloj virtual solo para esa conexión.
 - Formato de escenario `lab/scenarios/<nombre>.json` (tenants, dominios, perfiles, número de mensajes, llegadas de Poisson sembradas, configuración del motor y duración virtual) y escenarios `backoff`, `limits` y `determinism`.
 - `mtadst classify --corpus corpus/classification.json --out <archivo>`: una decisión del clasificador por caso del corpus (`id`, `class`, `subtype`, `rule_id`).
+- Verificador `python3 -m verifier verify --out out [--only ...]` (Python, solo biblioteca estándar, sin código del motor): lectores de `receiver.jsonl`, `engine.db` en solo lectura, `harness.jsonl` y `.eml`, reporte `out/report.json` y las propiedades `classification`, `backoff_expiry`, `receiver_limits` (modo simulado), `determinism`, `profile_sources` y `resources`.
+- `make build` (binarios en `bin/`) y `make verify`, el comando único: scope de systemd de usuario y espacio de nombres de usuario, red y montaje, donde el verificador levanta `lo`.
+- `lab/params.json` con los parámetros de la sección 5 del contrato.
 
 ### Decisiones
 
@@ -37,4 +40,6 @@
 - Las decisiones sin respuesta del receptor (NXDOMAIN, MX inutilizable, error temporal de DNS, MX inalcanzable, cierre silencioso, pérdida de conexión) llevan su propio `rule_id`, fuera de la tabla de respuestas del clasificador.
 - Modo simulado (contrato 2.2): el ejecutor reutiliza el cliente SMTP del motor, el analizador de respuestas, los códecs de DATA de los dos lados y el DNS de laboratorio contestado en proceso, para que lo simulado y lo real difieran solo en el transporte y el reloj. La red y el DNS no consumen tiempo virtual; solo la latencia declarada en un perfil.
 - En modo simulado el almacén usa `synchronous=OFF` (cambia D03 solo para `mtadst`): no muere ningún proceso, así que la durabilidad no cambia ninguna salida. Medido: el escenario `limits` baja de 54,8 s a 5,0 s con el mismo `trace.sha256`.
+- `backoff_expiry` exige además que cada intervalo entre intentos sea al menos la espera del calendario de `lab/params.json` para ese reintento. Sin esa condición, reintentar con un intervalo constante mínimo (el mutante `mut_no_backoff`) cumpliría «no decreciente y ≤ máximo» y la propiedad no lo detectaría.
+- El verificador recalcula `trace.sha256` desde `receiver.jsonl` y `engine.db` en vez de leer el que escribe el motor, y falla si no coinciden.
 - `events.jsonl` usa los escapes de `json.dumps` de Python (`ensure_ascii`), para que el verificador lo reconstruya desde `engine.db` con la biblioteca estándar y compare bytes.
