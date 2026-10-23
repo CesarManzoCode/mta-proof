@@ -32,6 +32,9 @@ type Config struct {
 	Providers  []Provider  `json:"providers"`
 	Limits     Limits      `json:"limits"`
 	Adapt      Adapt       `json:"adapt"`
+	// TenantPause pauses a tenant whose bounce rate crosses a threshold;
+	// nil turns the monitor off.
+	TenantPause *TenantPause `json:"tenant_pause"`
 
 	pools      []*srcPool
 	tenantPool map[string]*srcPool
@@ -212,6 +215,18 @@ type Adapt struct {
 	RateWindowS float64 `json:"rate_window_s"`
 }
 
+// TenantPause is the bounce monitor of each tenant (contract 2.6 and 5):
+// over the last Window terminal results of the tenant (delivered or
+// bounced) counted since it last resumed, a fraction of bounced above
+// BounceThreshold pauses the tenant for ResumeS seconds. Its messages stay
+// queued. The 4 % threshold is R-RESEND-WARMUP's; the window and the pause
+// length are supuestos.
+type TenantPause struct {
+	BounceThreshold float64 `json:"bounce_threshold"`
+	Window          int     `json:"window"`
+	ResumeS         float64 `json:"resume_s"`
+}
+
 func lookupLimit(m map[string]Limit, key string) Limit {
 	if l, ok := m[key]; ok {
 		return l
@@ -334,6 +349,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Adapt.RateWindowS < 0 {
 		return errors.New("adapt.rate_window_s must be positive")
+	}
+	if p := c.TenantPause; p != nil && (!(p.BounceThreshold > 0 && p.BounceThreshold < 1) || p.Window < 1 || !(p.ResumeS > 0)) {
+		return errors.New("tenant_pause needs 0 < bounce_threshold < 1, window >= 1 and resume_s > 0")
 	}
 	return nil
 }

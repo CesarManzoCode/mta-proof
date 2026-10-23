@@ -18,6 +18,10 @@
     {"name": "always-defer.test", "type": "MX", "pref": 10, "host": "mx1.always-defer.test"},
     {"name": "mx1.always-defer.test", "type": "A", "addr": "127.0.1.6"},
 
+    {"name": "latency-model.test", "type": "MX", "pref": 10, "host": "mx1.latency-model.test"},
+    {"name": "alt.latency-model.test", "type": "MX", "pref": 10, "host": "mx1.latency-model.test"},
+    {"name": "mx1.latency-model.test", "type": "A", "addr": "127.0.1.8"},
+
     {"name": "nullmx.test", "type": "MX", "pref": 0, "host": "."},
 
     {"name": "fallback.test", "type": "MX", "pref": 10, "host": "mx1.fallback.test"},

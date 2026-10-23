@@ -63,6 +63,9 @@ type Core struct {
 	lastN  int64
 	writes []store.Write
 	s      *sched
+	// tenantLog waits for SetDelivery, which knows the bounce window, to
+	// rebuild the tenant monitors.
+	tenantLog []store.TenantEvent
 }
 
 // NewCore rebuilds the core from a snapshot and runs start-up recovery:
@@ -87,6 +90,7 @@ func NewCore(snap *store.Snapshot, clk clock.Clock, rng *rand.Rand) *Core {
 		c.restoreLearned(d)
 	}
 	c.restoreUse(snap.Attempts)
+	c.tenantLog = snap.Tenant
 	c.recover(snap.Messages)
 	for _, m := range snap.Messages {
 		if m.State == store.StateQueued {
@@ -324,6 +328,9 @@ func (c *Core) update(m *store.Message) {
 func (c *Core) event(e *store.Event, m *store.Message) {
 	e.MsgID, e.Tenant, e.Domain, e.MsgType = m.ID, m.Tenant, m.Domain, m.MsgType
 	c.writeEvent(e, c.nowMs())
+	if e.Kind == KindDelivered || e.Kind == KindBounced {
+		c.tenantResult(m.Tenant, e.Kind == KindBounced)
+	}
 }
 
 func (c *Core) writeEvent(e *store.Event, at int64) {

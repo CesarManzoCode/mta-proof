@@ -1,0 +1,33 @@
+{
+  "name": "tenant-pause",
+  "description": "Tres tenants con la configuración de lab/engine.json (monitor de rebote: umbral 0,04 sobre los últimos 200 resultados, pausa de 300 s). acme y globex envían a baseline.test, que acepta todo. spamco envía a gmail-model.test y uno de cada cinco de sus mensajes va a un buzón inexistente (prefijo nouser), que gmail-model rechaza con 550 5.1.1 (R-GOOGLE-ERR): su tasa de rebote ronda 0,2, por encima del umbral, así que el motor lo pausa cada vez que llena una ventana. Cada tenant tiene un límite de 200 intentos por minuto (supuesto), por debajo de los 300 por IP de gmail-model, para que la cola acumulada durante una pausa no choque con el receptor al reanudar. La variante baseline es la misma carga con la misma semilla y spamco enviando solo a buzones existentes: la corrida base de tenant_pause.",
+  "engine": {
+    "base": "lab/engine.json",
+    "set": {"limits": {"tenant": {"*": {"rate": {"limit": 200, "per_s": 60}}}}}
+  },
+  "profiles": ["gmail-model", "baseline"],
+  "tenants": [
+    {"name": "acme", "from": "notify@baseline.test"},
+    {"name": "globex", "from": "alerts@baseline.test"},
+    {"name": "spamco", "from": "promo@baseline.test", "msg_type": "marketing", "domains": [
+      {"domain": "gmail-model.test", "local_prefix": "nouser", "weight": 1},
+      {"domain": "gmail-model.test", "weight": 4}
+    ]}
+  ],
+  "domains": [{"domain": "baseline.test"}],
+  "messages": 4800,
+  "arrival": {"process": "poisson", "rate_per_s": 4},
+  "duration_s": 86400,
+  "variants": {
+    "baseline": {
+      "tenants": [
+        {"name": "acme", "from": "notify@baseline.test"},
+        {"name": "globex", "from": "alerts@baseline.test"},
+        {"name": "spamco", "from": "promo@baseline.test", "msg_type": "marketing", "domains": [
+          {"domain": "gmail-model.test", "weight": 1},
+          {"domain": "gmail-model.test", "weight": 4}
+        ]}
+      ]
+    }
+  }
+}

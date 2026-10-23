@@ -14,7 +14,7 @@ import (
 )
 
 const usage = `usage:
-  mtadst run --scenario <file> --seed <n> --out <dir> [--root .] [--research vault/RESEARCH.md]
+  mtadst run --scenario <file> [--variant <name>] --seed <n> --out <dir> [--root .] [--research vault/RESEARCH.md]
   mtadst classify --corpus corpus/classification.json --out <file>`
 
 func main() {
@@ -26,6 +26,7 @@ func main() {
 	case "run":
 		fs := flag.NewFlagSet("run", flag.ExitOnError)
 		scenario := fs.String("scenario", "", "scenario file, like lab/scenarios/backoff.json (required)")
+		variant := fs.String("variant", "", "variant of the scenario to run (default: the scenario itself)")
 		seed := fs.Uint64("seed", 1, "run seed: engine streams and arrivals")
 		out := fs.String("out", "", "run directory, new or empty (required)")
 		root := fs.String("root", ".", "repository root; scenario paths are relative to it")
@@ -34,7 +35,7 @@ func main() {
 		if *scenario == "" || *out == "" {
 			log.Fatal("mtadst: --scenario and --out are required")
 		}
-		sc, err := dst.LoadScenario(*scenario)
+		sc, err := dst.LoadScenario(*scenario, *variant)
 		if err != nil {
 			log.Fatalf("mtadst: %v", err)
 		}

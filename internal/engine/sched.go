@@ -212,19 +212,23 @@ type sched struct {
 	supp      map[suppKey]*store.Suppression
 	use       map[netip.Addr]*ipUse
 	inflight  map[string]attemptStart
+	tenants   map[string]*tenantState
 }
 
 func newSched() *sched {
 	return &sched{queues: map[queueKey]*queue{}, routes: map[string]*route{}, resolving: map[string]bool{},
 		conns: map[int64]*connState{}, starts: map[string][]int64{}, learned: map[string]*learnedLimits{},
 		blocked: map[queueKey][]string{}, supp: map[suppKey]*store.Suppression{},
-		use: map[netip.Addr]*ipUse{}, inflight: map[string]attemptStart{}}
+		use: map[netip.Addr]*ipUse{}, inflight: map[string]attemptStart{},
+		tenants: map[string]*tenantState{}}
 }
 
 // SetDelivery configures delivery. The MX shuffle draws from its own
 // stream of the run seed, so it does not shift the core's other streams.
 func (c *Core) SetDelivery(cfg *Config, rng *rand.Rand) {
 	c.s.cfg, c.s.rng = cfg, rng
+	c.restoreTenants(c.tenantLog)
+	c.tenantLog = nil
 }
 
 func (c *Core) enqueue(m *store.Message) {
@@ -407,6 +411,7 @@ func (c *Core) Dispatch() ([]Action, int64) {
 			wake = t
 		}
 	}
+	addWake(c.resumeTenants(now))
 	s.blocked = map[queueKey][]string{}
 	for progress := true; progress; {
 		progress = false
@@ -448,6 +453,9 @@ type served struct {
 // connection, within the limits.
 func (c *Core) serve(q *queue, cs *connState, now int64) served {
 	s := c.s
+	if c.tenantPaused(q.key.tenant) {
+		return served{} // resumeTenants wakes the dispatch when the pause ends
+	}
 	m := c.head(q)
 	if m == nil {
 		return served{}

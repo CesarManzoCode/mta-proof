@@ -68,12 +68,14 @@ class Context:
             raise RuntimeError(f"{' '.join(cmd)}: exit {res.returncode}: {res.stderr.strip()}")
         return res.stdout
 
-    def simulate(self, scenario, seed, out_dir):
-        """mtadst run of lab/scenarios/<scenario>.json into an empty out_dir."""
+    def simulate(self, scenario, seed, out_dir, variant=None):
+        """mtadst run of lab/scenarios/<scenario>.json, or of one of its variants,
+        into an empty out_dir."""
         if os.path.lexists(out_dir):
             shutil.rmtree(out_dir)
         os.makedirs(os.path.dirname(out_dir), exist_ok=True)
-        self.mtadst("run", "--scenario", self.path("lab", "scenarios", scenario + ".json"),
+        extra = ["--variant", variant] if variant else []
+        self.mtadst("run", "--scenario", self.path("lab", "scenarios", scenario + ".json"), *extra,
                     "--seed", str(seed), "--out", out_dir, "--root", self.root,
                     "--research", os.path.join("vault", "RESEARCH.md"))
         return out_dir

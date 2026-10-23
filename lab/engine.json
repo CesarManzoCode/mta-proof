@@ -27,7 +27,8 @@
     {"name": "yahoo-model", "mx_suffixes": ["yahoo-model.test"]},
     {"name": "outlook-model", "mx_suffixes": ["outlook-model.test"]},
     {"name": "baseline", "mx_suffixes": ["baseline.test"]},
-    {"name": "always-defer", "mx_suffixes": ["always-defer.test"]}
+    {"name": "always-defer", "mx_suffixes": ["always-defer.test"]},
+    {"name": "latency-model", "mx_suffixes": ["latency-model.test"]}
   ],
   "limits": {
     "domain": {"*": {"connections": 5, "msgs_per_conn": 100}},
@@ -35,5 +36,6 @@
     "tenant": {},
     "src_ip": {"*": {"connections": 50}}
   },
-  "adapt": {"rate_window_s": 60}
+  "adapt": {"rate_window_s": 60},
+  "tenant_pause": {"bounce_threshold": 0.04, "window": 200, "resume_s": 300}
 }

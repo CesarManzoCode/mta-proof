@@ -20,7 +20,7 @@ const root = "../.."
 // runScenario runs lab/scenarios/<name>.json into a new directory.
 func runScenario(t *testing.T, name string, seed uint64) (string, *Summary) {
 	t.Helper()
-	sc, err := LoadScenario(filepath.Join(root, "lab", "scenarios", name+".json"))
+	sc, err := LoadScenario(filepath.Join(root, "lab", "scenarios", name+".json"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestBackoffSimulatesDaysInSeconds(t *testing.T) {
 	start := time.Now()
 	dir, sum := runScenario(t, "backoff", 1)
 	wall := time.Since(start)
-	sc, _ := LoadScenario(filepath.Join(root, "lab", "scenarios", "backoff.json"))
+	sc, _ := LoadScenario(filepath.Join(root, "lab", "scenarios", "backoff.json"), "")
 	cfg, err := sc.EngineConfig(root)
 	if err != nil {
 		t.Fatal(err)
@@ -346,8 +346,59 @@ func TestScenarioRejectsUnknownFieldsAndMergesEngine(t *testing.T) {
 	}
 }
 
+func TestScenarioVariantsAndTenantDomains(t *testing.T) {
+	data := []byte(`{"name":"v","profiles":["gmail-model"],
+		"tenants":[{"name":"good","from":"a@baseline.test","weight":2},
+			{"name":"bad","from":"b@baseline.test","domains":[{"domain":"gmail-model.test","local_prefix":"nouser"}]}],
+		"domains":[{"domain":"baseline.test"}],"messages":200,"arrival":{"process":"poisson","rate_per_s":1},
+		"duration_s":10,
+		"variants":{"healthy":{"tenants":[{"name":"good","from":"a@baseline.test","weight":2},
+			{"name":"bad","from":"b@baseline.test","domains":[{"domain":"gmail-model.test"}]}]}}}`)
+	sc, err := ParseScenario(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := sc.BuildVariant(data, "healthy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Variant != "healthy" || v.Name != "v" || v.Variants != nil {
+		t.Fatalf("variant %q of %q, variants %v", v.Variant, v.Name, v.Variants)
+	}
+	// Same draws: the variant changes only the bad tenant's local part.
+	a, b := sc.Arrivals(7), v.Arrivals(7)
+	bad := 0
+	for i := range a {
+		want := a[i].Sub
+		if want.Tenant == "bad" {
+			bad++
+			if !strings.HasPrefix(want.To, "nouser") || !strings.HasSuffix(want.To, "@gmail-model.test") {
+				t.Fatalf("bad tenant message to %s", want.To)
+			}
+			want.To = strings.TrimPrefix(want.To, "no")
+		} else if !strings.HasSuffix(want.To, "@baseline.test") {
+			t.Fatalf("good tenant message to %s", want.To)
+		}
+		if a[i].AtMs != b[i].AtMs || want != b[i].Sub {
+			t.Fatalf("message %d: %+v / %+v", i, a[i], b[i])
+		}
+	}
+	if bad == 0 || bad == len(a) {
+		t.Fatalf("%d of %d messages from the bad tenant", bad, len(a))
+	}
+	if _, err := sc.BuildVariant(data, "missing"); err == nil {
+		t.Error("unknown variant built")
+	}
+	for _, bogus := range []string{`{"name":"w"}`, `{"variants":{}}`, `{"messages":0}`} {
+		d := []byte(strings.Replace(string(data), `"variants":{`, `"variants":{"x":`+bogus+`,`, 1))
+		if _, err := ParseScenario(d); err == nil {
+			t.Errorf("variant %s accepted", bogus)
+		}
+	}
+}
+
 func TestRunRefusesNonEmptyOut(t *testing.T) {
-	sc, err := LoadScenario(filepath.Join(root, "lab", "scenarios", "backoff.json"))
+	sc, err := LoadScenario(filepath.Join(root, "lab", "scenarios", "backoff.json"), "")
 	if err != nil {
 		t.Fatal(err)
 	}

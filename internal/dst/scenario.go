@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/CesarManzoCode/mta-proof/internal/clock"
 	"github.com/CesarManzoCode/mta-proof/internal/engine"
@@ -37,6 +38,12 @@ type Scenario struct {
 	// DurationS is the virtual time the run lasts; the run ends earlier
 	// when nothing is left to happen.
 	DurationS float64 `json:"duration_s"`
+	// Variants are other runs of the same scenario, for the comparisons of
+	// equivalent runs (D19): each one is merged over the scenario like
+	// Engine.Set over its base. They may not change name or variants.
+	Variants map[string]map[string]any `json:"variants"`
+	// Variant is the variant this scenario was built as; "" for the base.
+	Variant string `json:"-"`
 }
 
 // EngineSpec builds the engine configuration from Base with Set merged on
@@ -46,12 +53,14 @@ type EngineSpec struct {
 	Set  map[string]any `json:"set"`
 }
 
-// Tenant is a sender: each message of the tenant comes from From.
+// Tenant is a sender: each message of the tenant comes from From. With
+// Domains, the tenant's messages go to those instead of the scenario's.
 type Tenant struct {
-	Name    string `json:"name"`
-	From    string `json:"from"`
-	MsgType string `json:"msg_type"`
-	Weight  int    `json:"weight"`
+	Name    string   `json:"name"`
+	From    string   `json:"from"`
+	MsgType string   `json:"msg_type"`
+	Weight  int      `json:"weight"`
+	Domains []Domain `json:"domains"`
 }
 
 // Domain is a destination. Recipients are <local_prefix><n>@<domain>: with
@@ -72,21 +81,76 @@ type Arrival struct {
 	StartS   float64 `json:"start_s"`
 }
 
-// LoadScenario reads and validates a scenario file.
-func LoadScenario(path string) (*Scenario, error) {
+// LoadScenario reads and validates a scenario file and returns it as
+// variant ("" for the base scenario).
+func LoadScenario(path, variant string) (*Scenario, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 	sc, err := ParseScenario(data)
+	if err == nil && variant != "" {
+		sc, err = sc.BuildVariant(data, variant)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	return sc, nil
 }
 
-// ParseScenario decodes and validates a scenario and fills defaults.
+// ParseScenario decodes and validates a scenario and every variant of it,
+// and fills defaults.
 func ParseScenario(data []byte) (*Scenario, error) {
+	sc, err := parseScenario(data)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(sc.Variants))
+	for name := range sc.Variants {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if _, err := sc.BuildVariant(data, name); err != nil {
+			return nil, err
+		}
+	}
+	return sc, nil
+}
+
+// BuildVariant returns variant name of the scenario whose file is data:
+// the variant merged over the file without its variants.
+func (sc *Scenario) BuildVariant(data []byte, name string) (*Scenario, error) {
+	v, ok := sc.Variants[name]
+	if !ok {
+		return nil, fmt.Errorf("unknown variant %q", name)
+	}
+	if _, ok := v["name"]; ok {
+		return nil, fmt.Errorf("variant %s: may not change name", name)
+	}
+	if _, ok := v["variants"]; ok {
+		return nil, fmt.Errorf("variant %s: may not hold variants", name)
+	}
+	var base map[string]any
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	if err := dec.Decode(&base); err != nil {
+		return nil, err
+	}
+	delete(base, "variants")
+	merged, err := json.Marshal(merge(base, v))
+	if err != nil {
+		return nil, err
+	}
+	out, err := parseScenario(merged)
+	if err != nil {
+		return nil, fmt.Errorf("variant %s: %w", name, err)
+	}
+	out.Variant = name
+	return out, nil
+}
+
+func parseScenario(data []byte) (*Scenario, error) {
 	var sc Scenario
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
@@ -136,9 +200,28 @@ func (sc *Scenario) validate() error {
 		if err := probe.Validate(); err != nil {
 			return fmt.Errorf("tenants: %s: %w", t.Name, err)
 		}
+		if err := validateDomains(t.Domains); err != nil {
+			return fmt.Errorf("tenants: %s: %w", t.Name, err)
+		}
 	}
-	for i := range sc.Domains {
-		d := &sc.Domains[i]
+	if err := validateDomains(sc.Domains); err != nil {
+		return err
+	}
+	if sc.Messages < 1 {
+		return errors.New("messages must be at least 1")
+	}
+	if sc.Arrival.Process != "poisson" || !(sc.Arrival.RatePerS > 0) || sc.Arrival.StartS < 0 {
+		return errors.New(`arrival: process "poisson" with rate_per_s > 0 and start_s >= 0`)
+	}
+	if !(sc.DurationS > 0) {
+		return errors.New("duration_s must be positive")
+	}
+	return nil
+}
+
+func validateDomains(ds []Domain) error {
+	for i := range ds {
+		d := &ds[i]
 		if d.LocalPrefix == "" {
 			d.LocalPrefix = "user"
 		}
@@ -153,15 +236,6 @@ func (sc *Scenario) validate() error {
 		if err := probe.Validate(); err != nil {
 			return fmt.Errorf("domains: %s: %w", d.Domain, err)
 		}
-	}
-	if sc.Messages < 1 {
-		return errors.New("messages must be at least 1")
-	}
-	if sc.Arrival.Process != "poisson" || !(sc.Arrival.RatePerS > 0) || sc.Arrival.StartS < 0 {
-		return errors.New(`arrival: process "poisson" with rate_per_s > 0 and start_s >= 0`)
-	}
-	if !(sc.DurationS > 0) {
-		return errors.New("duration_s must be positive")
 	}
 	return nil
 }
@@ -214,16 +288,21 @@ type ArrivalAt struct {
 }
 
 // Arrivals draws the arrivals of the scenario from the dst.arrivals stream
-// of seed. Per message, in this order: the gap, the tenant, the domain and,
-// when the domain has a recipient pool, the recipient.
+// of seed. Per message, in this order: the gap, the tenant, the domain
+// (among the tenant's own domains, if it has them) and, when the domain has
+// a recipient pool, the recipient.
 func (sc *Scenario) Arrivals(seed uint64) []ArrivalAt {
 	rng := clock.Rand(seed, "dst.arrivals")
-	tw, dw := 0, 0
+	tw := 0
 	for _, t := range sc.Tenants {
 		tw += t.Weight
 	}
-	for _, d := range sc.Domains {
-		dw += d.Weight
+	weights := func(ds []Domain) int {
+		w := 0
+		for _, d := range ds {
+			w += d.Weight
+		}
+		return w
 	}
 	pick := func(total int, weight func(int) int) int {
 		r := rng.IntN(total)
@@ -239,7 +318,11 @@ func (sc *Scenario) Arrivals(seed uint64) []ArrivalAt {
 	for i := 0; i < sc.Messages; i++ {
 		t += rng.ExpFloat64() / sc.Arrival.RatePerS
 		ten := sc.Tenants[pick(tw, func(j int) int { return sc.Tenants[j].Weight })]
-		dom := sc.Domains[pick(dw, func(j int) int { return sc.Domains[j].Weight })]
+		ds := sc.Domains
+		if len(ten.Domains) > 0 {
+			ds = ten.Domains
+		}
+		dom := ds[pick(weights(ds), func(j int) int { return ds[j].Weight })]
 		n := i
 		if dom.Recipients > 0 {
 			n = rng.IntN(dom.Recipients)

@@ -32,6 +32,7 @@ type Options struct {
 // Summary describes a finished run.
 type Summary struct {
 	Scenario   string         `json:"scenario"`
+	Variant    string         `json:"variant,omitempty"`
 	Seed       uint64         `json:"seed"`
 	Messages   int            `json:"messages"`
 	States     map[string]int `json:"states"`
@@ -162,7 +163,7 @@ func Run(o Options) (*Summary, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Summary{Scenario: sc.Name, Seed: o.Seed, Messages: len(snap.Messages), States: states,
+	return &Summary{Scenario: sc.Name, Variant: sc.Variant, Seed: o.Seed, Messages: len(snap.Messages), States: states,
 		Events: len(evs), Steps: step.Executed(), VirtualMs: clock.Ms(clk.Now()), Complete: complete,
 		WallMs: time.Since(wall).Milliseconds(), TraceSHA: sum, ReceiverLn: lines}, nil
 }

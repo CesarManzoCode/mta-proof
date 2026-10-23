@@ -346,6 +346,18 @@ type Snapshot struct {
 	// source address of the last two days of the log, in seq order: the
 	// core rebuilds the warm-up use of each address from them.
 	Attempts []AttemptEvent
+	// Tenant are the terminal results (delivered, bounced) and the
+	// tenant_paused and tenant_resumed events, in seq order: the core
+	// rebuilds each tenant's bounce window and pause from them.
+	Tenant []TenantEvent
+}
+
+// TenantEvent is one event of Snapshot.Tenant.
+type TenantEvent struct {
+	Tenant string
+	Kind   string
+	AtMs   int64
+	Detail string
 }
 
 // AttemptEvent is one attempt start or result of Snapshot.Attempts.
@@ -443,6 +455,23 @@ func (s *Store) Load() (*Snapshot, error) {
 			return nil, err
 		}
 		snap.Attempts = append(snap.Attempts, a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	rows, err = s.db.Query(`SELECT COALESCE(tenant, ''), kind, at_ms, COALESCE(detail, '') FROM events
+		WHERE kind IN ('delivered', 'bounced', 'tenant_paused', 'tenant_resumed') ORDER BY seq`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var t TenantEvent
+		if err := rows.Scan(&t.Tenant, &t.Kind, &t.AtMs, &t.Detail); err != nil {
+			return nil, err
+		}
+		snap.Tenant = append(snap.Tenant, t)
 	}
 	return snap, rows.Err()
 }
