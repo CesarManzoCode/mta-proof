@@ -52,10 +52,17 @@ Toda corrida real ocurre dentro de un espacio de nombres de usuario, red y monta
 - El orquestador monta un `resolv.conf` propio (`nameserver 127.0.0.1`) solo dentro del espacio de nombres; el motor no depende de él (consulta a la dirección configurada), el MTA externo sí.
 - `mtasim` abre un socket de control Unix por corrida para: cambiar de perfil en caliente, cortar conexiones y retener la respuesta 250 de un mensaje (ver 4.4).
 - `mtasim serve --out <dir> [--dns 127.0.0.1:53] [--smtp-port 25] [--profiles profiles] [--zone lab/zone.json] [--control <dir>/control.sock]`: cada host de cada perfil escucha en sus direcciones A de la zona (3.9) y en el puerto indicado; imprime `ready` en la salida estándar cuando todo escucha. Fuera del espacio de nombres se prueba con puertos altos, porque Linux enruta todo `127.0.0.0/8` por `lo`.
+- `mtaengine serve --db <engine.db> [--http 127.0.0.1:8025] [--seed 1] [--max-batch 256]` (diseño, k1-02): recupera el almacén, confirma los eventos `recovered`, abre la API de ingreso (3.10) e imprime `ready` cuando escucha.
 
 ### 2.4 Almacén
 
 SQLite mediante `modernc.org/sqlite` (Go puro, sin CGO), en modo WAL con `synchronous=FULL`. El motor responde 202 al ingreso solo después del commit; registra el resultado de un intento en una transacción antes de considerarlo hecho. Se permite agrupar commits (group commit) de peticiones concurrentes.
+
+Diseño (k1-02):
+
+- Tablas `messages` (una fila por mensaje con su estado, número de intentos, próximo intento y el mensaje RFC 5322 ya construido, que se envía igual en cada intento), `idempotency_keys` y `events` (3.3). Estados: `queued`, `inflight` y los terminales de 3.3.
+- El núcleo guarda el estado en memoria y produce una lista ordenada de escrituras; el ejecutor real ejecuta en una goroutine las operaciones que llegaron mientras se confirmaba el grupo anterior (hasta `--max-batch`), confirma sus escrituras en una sola transacción y solo entonces responde a cada una. Si un commit falla, el motor se detiene: la memoria quedó por delante del disco y se reconstruye al arrancar.
+- Recuperación al arrancar: cada mensaje `inflight` (intento con `attempt_started` sin resultado) vuelve a `queued`, vencido en el instante del arranque, con un evento `recovered` cuyo `attempt` es el del intento abandonado. Los eventos se confirman antes de abrir la API.
 
 ### 2.5 Comandos
 
@@ -146,6 +153,8 @@ Parámetros por tipo (diseño, k1-01). Los límites cuentan solo comandos acepta
 
 Estados terminales: `delivered`, `bounced`, `expired`, `suppressed`. Cada mensaje aceptado tiene un único evento `accepted`.
 
+`detail` de los eventos de ingreso (diseño, k1-02): `accepted` lleva `payload_sha256` e `idempotency_key` si hubo clave; `idempotent_replay` e `idempotency_conflict` llevan `idempotency_key` y el `payload_sha256` de la petición, y su `msg_id` es el del mensaje que creó la clave; `recovered` lleva `from_state`. Las claves de `detail` van ordenadas.
+
 ### 3.4 Registro del receptor (`receiver.jsonl`)
 
 Una línea JSON por evento, en orden de escritura, con `fsync` al cerrar cada respuesta a `DATA`:
@@ -206,6 +215,15 @@ Clases: `permanent`, `transient`, `undetermined`. Subtipos: los de Resend (`Gene
 
 - Tipos `A`, `MX` y `TXT`. Todo nombre cuelga de `.test` y toda dirección es IPv4 de loopback; el cargador rechaza lo demás. Un null MX es el único MX de su dominio y tiene preferencia 0 [R-7505 §3].
 - El DNS de `mtasim` es autoritativo para `test.` por UDP y TCP: `NXDOMAIN` para nombres inexistentes y respuesta vacía para tipos ausentes, ambos con un SOA sintético; `REFUSED` fuera de `.test`. Los TXT de más de 255 octetos se parten en cadenas de 255.
+
+### 3.10 API de ingreso y mensaje generado (diseño, k1-02)
+
+`POST /v1/messages` con un objeto JSON de exactamente estos campos, todos obligatorios: `tenant` (1–64 de `[A-Za-z0-9._-]`), `from` y `to` (un addr-spec ASCII cada uno, sin nombre ni lista: un destinatario por mensaje, D13), `subject` (1–900 caracteres ASCII imprimibles, para no superar 998 por línea [R-5322 §2.1.1]), `text` (UTF-8, hasta 512 KiB, puede ser vacío) y `msg_type` (`transactional` o `marketing`). Un campo desconocido, un JSON inválido o datos tras el objeto dan 400 sin evento.
+
+- `Idempotency-Key` opcional, 1–256 caracteres ASCII imprimibles, ventana de 24 h [R-RESEND-IDEMP]. La clave es global (no por tenant): sin autenticación el `tenant` es parte del payload, y otro tenant con la misma clave es otro payload. El payload es la petición ya analizada (el orden de las claves JSON y los espacios no cuentan). Dentro de la ventana, mismo payload → 202 con el mismo `id`, cabecera `Idempotent-Replayed: true` y evento `idempotent_replay`; otro payload → 409 con el `id` original y evento `idempotency_conflict`. Una clave con 24 h o más se olvida: la petición crea un mensaje nuevo y la clave pasa a él.
+- Respuestas: 202 `{"id": "<msg_id>"}` después del commit; 400 y 409 `{"error": ...}`; 503 si el motor se detuvo.
+- `msg_id`: `m` seguido del número secuencial del almacén con al menos ocho dígitos (`m00000001`); sigue tras reiniciar sin huecos (D15).
+- Mensaje: cabeceras `Date` (instante del ingreso en UTC, `Thu, 22 Oct 2026 13:05:09 +0000`) [R-5322 §3.3, §3.6.1], `From`, `To`, `Subject`, `Message-ID: <msg_id.mtaproof@dominio-del-from>` [R-5322 §3.6.4], `X-Mtaproof-Id: <msg_id>`, `MIME-Version: 1.0`, `Content-Type: text/plain; charset=utf-8` y `Content-Transfer-Encoding: quoted-printable`; líneas CRLF.
 
 ## 4. Propiedades
 

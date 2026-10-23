@@ -9,7 +9,7 @@ Etiquetas: **primaria** (emisor oficial del dato) y **secundaria** (blog, agrega
 | Id | Fuente | Revisión fijada | Secciones leídas en K0 | Lo que usa el proyecto |
 | --- | --- | --- | --- | --- |
 | R-5321 | RFC 5321, SMTP | sha256 `7d560eddff1b213c17d4e1e5f95005728b2f05bc2b3947f0fcc91717c6707634` | §4.5.4.1, §4.5.5, §5.1 | El 250 tras DATA transfiere la responsabilidad. Reintento ≥ 30 min «en general», dos intentos en la primera hora y luego cada 2–3 h, abandono a 4–5 días, parámetros configurables. 5yz a MAIL no se cachea. MX ordenados por preferencia, aleatorios a igual preferencia, probar al menos dos direcciones; MX implícito si no hay MX. DSN con reverse-path nulo |
-| R-5322 | RFC 5322, formato de mensaje | sha256 `cb459acca15a2aa895863eaeff6f1d5b9c4ca15578ae3e3706f757787a385969` | — (lo lee k2-04) | Formato de los mensajes generados |
+| R-5322 | RFC 5322, formato de mensaje | sha256 `cb459acca15a2aa895863eaeff6f1d5b9c4ca15578ae3e3706f757787a385969` (verificado de nuevo en k1-02) | §2.1.1, §3.3, §3.6, §3.6.1, §3.6.2, §3.6.4 (k1-02); el resto lo lee k2-04 | Formato de los mensajes generados. Solo `Date` (una vez) y `From` (una vez) son obligatorios; `To`, `Subject` y `Message-ID` como máximo una vez y `Message-ID` «SHOULD»; `msg-id` = `<` id-left `@` id-right `>` con dot-atom-text y dominio recomendado a la derecha; fecha con día de la semana coherente, `+0000` para UTC; líneas de 998 caracteres como máximo |
 | R-7505 | RFC 7505, null MX | sha256 `c746618ea6f26fab7828075696be275d42f4aa134a3e9853cbc6f7ed4d859eb9` | §3, §4.1, §4.2 | Un único MX de preferencia 0 y exchange `.`; el emisor no encola ni reintenta; `556 5.1.10` |
 | R-3463 | RFC 3463, códigos de estado extendidos | sha256 `ccfbf657f4d3ac7c89cca03bd1abed355efe3f4b170162e32a6ff344cebfe851` | §2 | Clase 4 = transitoria persistente, 5 = permanente; ante detalle desconocido, usar el sujeto |
 | R-3464 | RFC 3464, DSN | sha256 `8d213b662d9c40a7a729db598beb1d3f0139b7532b3c9a7be06ef220c84c397c` | §2 (estructura) | `multipart/report; report-type=delivery-status`, segunda parte `message/delivery-status`, dirigido al reverse-path original |
@@ -42,7 +42,7 @@ Las filas «vía investigación» se apoyan en los archivos de investigación de
 | Id | Software | Versión fijada | Hash o verificación | Licencia |
 | --- | --- | --- | --- | --- |
 | S-GO | Go | 1.27.3 (`go version`) | instalado en la máquina | BSD-3 |
-| S-SQLITE | `modernc.org/sqlite` | v1.61.0 | go.sum `h1:sQi63oLQ9uquAUA4CzOisH35Q3pEszkPBuHM0tFL8CY=` | BSD-3 (SQLite: dominio público) |
+| S-SQLITE | `modernc.org/sqlite` | v1.61.0 | go.sum `h1:sQi63oLQ9uquAUA4CzOisH35Q3pEszkPBuHM0tFL8CY=` | BSD-3 (SQLite: dominio público). Dependencia directa en `go.mod` desde k1-02: hash del go.sum igual al fijado, `LICENSE` BSD-3 en la caché de módulos y «License: BSD-3-Clause» en pkg.go.dev para v1.61.0. Pragmas por DSN (`_pragma=journal_mode(WAL)`, `_pragma=synchronous(FULL)`, `_txlock=immediate`), leídos en su `sqlite.go`. Arrastra, verificados por el `LICENSE` de cada módulo en la caché: `modernc.org/libc` v1.79.0 (BSD-3; incluye musl, go-netdb y nixpkgs, MIT, en `LICENSE-3RD-PARTY.md`), `modernc.org/mathutil` v1.7.1 (BSD-3), `modernc.org/memory` v1.12.1 (BSD-3, con avisos BSD de Go y mmap-go), `github.com/dustin/go-humanize` v1.1.0 (MIT), `github.com/google/uuid` v1.6.0 (BSD-3), `github.com/mattn/go-isatty` v0.0.24 (MIT), `github.com/ncruces/go-strftime` v1.1.0 (MIT), `github.com/remyoudompheng/bigfft` (BSD-3) y sube `golang.org/x/sys` a v0.49.0 (BSD-3) |
 | S-DNS | `github.com/miekg/dns` | v1.1.73 | go.sum `h1:uhT8nJxmTrPJYClxVxTCX+CVn6qnzSiybRk72Z6DgrE=` | BSD-3. La v2 vive en codeberg.org/miekg/dns; se usa v1. Dependencia directa en `go.mod` desde k1-01 (hash y `LICENSE` verificados en la caché de módulos); arrastra `golang.org/x/net` v0.57.0 y `golang.org/x/sys` v0.47.0, BSD-3 (`LICENSE` de cada módulo) |
 | S-MSGAUTH | `github.com/emersion/go-msgauth` | v0.7.0 | go.sum `h1:vj2hMn6KhFtW41kshIBTXvp6KgYSqpA/ZN9Pv4g1INc=` | MIT. `dkim.Sign`, `dkim.VerifyWithOptions` con `LookupTXT` propio |
 | S-SPF | `blitiri.com.ar/go/spf` | v1.6.0 | go.sum `h1:TK91HOya1R2J5b+x+NZfdYTqDqbr+Q+hil5gy8WzLDQ=` | MIT. `CheckHostWithSender` con `WithResolver` |
@@ -65,6 +65,9 @@ Arch Linux, kernel 7.2.10, 12 CPU, 14 GiB visibles, disco `/home` SSD.
 | `unshare --user --map-root-user --net --mount` sin root | `lo` arriba, bind a 127.0.0.7:25 y 127.0.0.1:53/udp, origen 127.0.0.42, 1.1.1.1 inalcanzable, `mount --bind` de `resolv.conf` | D06 |
 | `tc qdisc add dev lo root netem delay 5ms` en el espacio de nombres | RTT 10 ms | D06 |
 | `systemd-run --user --scope` y `memory.peak` | cuenta 300 MiB asignados por un hijo | D17 |
+| Ingreso de k1-02 (`go test -run TestKillDuringIngest -v`): 16 clientes concurrentes, 5 `SIGKILL` sembrados (semilla 1) sobre el mismo `engine.db` | 15 569 respuestas 202, 15 578 mensajes confirmados, 0 perdidos, `integrity_check` ok, ~1,4 s en total; con el 202 enviado antes del commit (cambio temporal, no versionado) la misma prueba pierde 16 | 2.4, D03 |
+| Commits agrupados (`TestAPIGroupCommit`, 32 clientes) | 640 operaciones en 42 commits | 2.4 |
+| Mensaje generado leído con `email.message_from_bytes(..., policy=email.policy.strict)` de Python 3.14.8 | sin defectos ni excepción | 3.10 |
 | `npm install Haraka@3.3.5` y `haraka --version` | funciona con Node 26.12.0; el script de instalación de `modern-syslog` queda bloqueado y no se usa | D08 |
 
 ## Huecos que siguen abiertos
