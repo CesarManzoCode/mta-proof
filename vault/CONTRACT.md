@@ -50,7 +50,7 @@ Toda corrida real ocurre dentro de un espacio de nombres de usuario, red y monta
 
 - Todos los nombres de laboratorio cuelgan de `.test` (reservado por RFC 6761). Las direcciones de correo son sintéticas.
 - El orquestador monta un `resolv.conf` propio (`nameserver 127.0.0.1`) solo dentro del espacio de nombres; el motor no depende de él (consulta a la dirección configurada), el MTA externo sí.
-- `mtasim` abre un socket de control Unix por corrida para: cambiar de perfil en caliente, cortar conexiones y retener la respuesta 250 de un mensaje (ver 4.2).
+- `mtasim` abre un socket de control Unix por corrida para: cambiar de perfil en caliente, cortar conexiones y retener la respuesta 250 de un mensaje (ver 4.4).
 
 ### 2.4 Almacén
 
@@ -88,7 +88,7 @@ SQLite mediante `modernc.org/sqlite` (Go puro, sin CGO), en modo WAL con `synchr
 
 - Cada regla lleva `source` (identificador de RESEARCH) y `assumption` (`true` si la cifra o el texto no salen de la fuente). Una regla sin `source` debe tener `assumption: true`.
 - Tipos de regla mínimos: `max_msgs_per_conn`, `rate` (por IP de origen y por perfil), `concurrency` (por IP de origen), `unknown_ip` (límites más estrictos para IPs fuera de su lista de conocidas), `respond` (respuesta fija por condición), `drop_mid_data`, `latency`, `auth` (SPF/DKIM/DMARC).
-- Las respuestas usan solo los códigos y textos de la tabla 3.2. Perfiles mínimos: `gmail-model`, `yahoo-model`, `outlook-model`, `baseline` (acepta todo, RFC 5321) y `always-defer`.
+- Las respuestas usan solo los códigos y textos de la tabla 3.2. Perfiles mínimos: `gmail-model`, `yahoo-model`, `outlook-model`, `baseline` (acepta todo, RFC 5321) y `always-defer` (responde `451 4.3.0` al final de DATA, para que el receptor vea el `msg_id` de cada intento).
 - Una violación es un comando aceptado por encima de un límite del perfil, ocurrido después de `adaptation_period_s` contados desde la primera conexión de esa IP de origen a ese perfil. El simulador responde a la violación según `on_violation` y la anota en su registro con el id de la regla.
 
 ### 3.2 Respuestas documentadas
@@ -132,7 +132,11 @@ Estados terminales: `delivered`, `bounced`, `expired`, `suppressed`. Cada mensaj
 
 Una línea JSON por evento, en orden de escritura, con `fsync` al cerrar cada respuesta a `DATA`:
 
-`seq`, `at_ms`, `conn`, `src_ip`, `dst_ip`, `host`, `profile`, `ev` (`connect`, `ehlo`, `starttls`, `mail`, `rcpt`, `data_end`, `reply`, `close`, `drop`, `violation`), y según el evento `mail_from`, `rcpt`, `msg_id` (cabecera `X-Mtaproof-Id`), `sha256` del mensaje, `code`, `enhanced`, `text`, `rule`, `tls` y `auth` (`spf`, `dkim`, `dmarc`). El mensaje aceptado se guarda además como `messages/<sha256>.eml`.
+`seq`, `at_ms`, `conn`, `src_ip`, `dst_ip`, `host`, `profile`, `ev` (`connect`, `ehlo`, `starttls`, `mail`, `rcpt`, `data_end`, `reply`, `close`, `drop`, `violation`), y según el evento `mail_from` (cadena vacía para el reverse-path nulo), `rcpt`, `msg_id` (cabecera `X-Mtaproof-Id`), `sha256` del mensaje, `code`, `enhanced`, `text`, `rule`, `tls` y `auth` (`spf`, `dkim`, `dmarc`, cada uno `pass` o `fail`).
+
+- `data_end` es una línea por cada DATA terminado y lleva la respuesta final a DATA (`code`, `enhanced`, `text`) junto con `msg_id` y `sha256`. `reply` es la respuesta a cualquier otro comando.
+- `violation` lleva `rule` y `counted` (`false` dentro del periodo de adaptación, `true` después).
+- El mensaje recibido se guarda además como `messages/<sha256>.eml`.
 
 ### 3.5 Registro del orquestador (`harness.jsonl`)
 
@@ -142,7 +146,7 @@ Una línea JSON por evento, en orden de escritura, con `fsync` al cerrar cada re
 
 En modo real, `at_ms` de los tres registros son milisegundos de reloj de pared (época Unix) de la misma máquina, así que se pueden ordenar entre sí; en modo simulado son milisegundos virtuales desde el inicio del escenario.
 
-Cada escenario escribe `out/runs/<escenario>-<semilla>/` con `receiver.jsonl`, `engine.db`, `harness.jsonl` (si hubo fallas), `messages/` y, en modo simulado, `trace.sha256` (sha256 de `receiver.jsonl` seguido de la exportación canónica de `events` en JSONL ordenada por `seq`). `out/` no se versiona.
+Cada escenario escribe `out/runs/<escenario>-<semilla>/` con `receiver.jsonl`, `engine.db`, `harness.jsonl` (si hubo fallas), `messages/` y, en modo simulado, `events.jsonl` (exportación canónica de `events`: una fila por línea, ordenada por `seq`, objeto JSON con claves ordenadas y separadores `,` y `:` sin espacios) y `trace.sha256` (hex del sha256 de los bytes de `receiver.jsonl` seguidos de los de `events.jsonl`). `out/` no se versiona.
 
 ### 3.7 Reporte (`out/report.json`)
 
@@ -198,9 +202,37 @@ Cada propiedad tiene un nombre fijo, que es su clave en el reporte. El verificad
 | `licenses` | Licencias | Inventario automático (`licenses/inventory.json`) de dependencias Go y npm con licencia; falla si alguna no está en la lista de licencias abiertas permitidas | estático | k3 |
 | `offline` | Licencias (sin Internet) | La corrida ocurre en un espacio de nombres de red cuya única interfaz es `lo` | todo | k3 |
 
-### 4.1 Mutantes
+### 4.1 Claves de `details` que leen los checkers
 
-Variantes por etiqueta de compilación (`go build -tags <nombre>`); el binario original no contiene su código. Mínimo seis, con estos nombres:
+| Propiedad | Claves obligatorias |
+| --- | --- |
+| `no_loss` | `messages`, `kills`, `kills_post_250`, `lost` |
+| `bounded_duplicates` | `duplicates`, `duplicates_outside_window` |
+| `idempotency` | `replays`, `conflicts_rejected` |
+| `receiver_limits` | `violations` (`{perfil: {ip: n}}`) |
+| `backoff_expiry` | `max_interval_s`, `expired`, `dsn_null_sender` |
+| `classification` | `cases`, `matched`, `decisions` (ruta a un JSONL con `id`, `class`, `subtype`, `rule_id` por caso del corpus) |
+| `dns_mx` | `null_mx_domain`, `fallback_domain` |
+| `determinism` | `runs` (tres directorios: A, B con la misma semilla, y otra semilla), `hash_a`, `hash_b`, `hash_other` |
+| `ip_warmup` | `plan` (`{ip: {"daily": [..], "hourly": [..], "start_day": n}}`: listas por día del plan, `null` sin tope; `start_day` es el día del plan en que está la IP al empezar la corrida, desde 1; el día `d` de la corrida, contado desde 0 en `at_ms // 86400000`, usa el índice `start_day - 1 + d` y, pasado el final, el último valor), `known_ips`, `throttle_rate_known`, `throttle_rate_unknown`. Los topes se cuentan como eventos `data_end` del receptor por `src_ip`; la tasa de estrangulamiento es la fracción de respuestas 4xx (`reply` y `data_end`) por grupo de IPs |
+| `tenant_pause` | `tenant`, `threshold`, `window`, `pause_bound_s`, `rate_ratio_others`. El `detail` de `tenant_paused` lleva `bounce_rate`, `window` y `threshold`. El cruce ocurre en el primer resultado terminal del tenant (`delivered` o `bounced`) en que los últimos `window` resultados están completos y su fracción de `bounced` supera `threshold`. `rate_ratio_others` es la tasa de entrega de los demás tenants con el tenant malo dividida por la de la corrida base; debe ser ≥ 1 / margen de aislamiento |
+| `destination_isolation` | `runs` (`{"baseline": dir, "throttled": dir}`), `throttled_domain`, `margin` (igual al de `lab/params.json`), `baseline`, `throttled` (cada uno `{"p50_ms", "p99_ms"}`, percentil por rango más cercano del tiempo entre `accepted` y el primer `delivered` de cada mensaje de otro dominio) |
+| `tls_policy` | `required_domain`, `opportunistic_domain` |
+| `outbound_auth` | `good_domain`, `broken_domain` |
+| `external_validation` | `mta`, `version`, `evaluated` (lista de nombres), `not_evaluated` (`{nombre: motivo}`) |
+| `offline` | `interfaces` |
+
+Cuando `trace` apunta a un directorio con varias corridas, cada una vive en un subdirectorio con el formato 3.6.
+
+### 4.2 Herramienta de depuración
+
+- `mtaq timeline --db <engine.db> --msg <msg_id>` imprime `{"msg_id": ..., "events": [...]}` con los eventos del mensaje en orden de `seq`; `--all` imprime una línea JSON por mensaje.
+- `mtaq agg --db <engine.db> --by <dim,...>` imprime una lista JSON de objetos con las dimensiones pedidas y `count`. Dimensiones: `tenant`, `domain`, `provider`, `mx_host`, `src_ip`, `msg_type`, `kind`.
+- Ambos aceptan filtros `--tenant`, `--domain`, `--provider`, `--src-ip`, `--msg-type`, `--kind`.
+
+### 4.3 Mutantes
+
+Variantes por etiqueta de compilación (`go build -tags <nombre>`, binario en `bin/mut/<nombre>/mtaengine`); el binario original no contiene su código. Mínimo seis, con estos nombres:
 
 | Mutante | Falla sembrada | Propiedad que debe caer |
 | --- | --- | --- |
@@ -213,7 +245,7 @@ Variantes por etiqueta de compilación (`go build -tags <nombre>`); el binario o
 
 `details` de `mutation_detection`: `original_exit_code` y una entrada por mutante con `name`, `exit_code` y `failed_properties`. Cada corrida de mutante deja su reporte en `out/runs/mutation/<nombre>/report.json`.
 
-### 4.2 Inyección de fallas
+### 4.4 Inyección de fallas
 
 - `kill -9` del motor en instantes aleatorios sembrados.
 - Ventana entre 250 y registro durable (`post_250`): el simulador, por el socket de control, avisa al orquestador antes de enviar el 250 de un mensaje marcado; el orquestador detiene el motor con `SIGSTOP`, autoriza el 250, y lo mata con `SIGKILL`. El receptor aceptó y el motor no pudo registrarlo.
@@ -222,18 +254,19 @@ Variantes por etiqueta de compilación (`go build -tags <nombre>`); el binario o
 
 ## 5. Parámetros del proyecto
 
-Valores iniciales en `lab/params.json`. Un sprint puede subirlos; bajar un mínimo de la idea exige una medición documentada en el CHANGELOG. Los mínimos de la idea no se bajan.
+Valores iniciales en `lab/params.json`. Un sprint puede endurecerlos (corridas más grandes, márgenes o plazos menores); aflojar uno exige una medición documentada en el contrato y el CHANGELOG. Los mínimos de la idea no se aflojan.
 
-| Parámetro | Valor inicial | Mínimo de la idea | Base |
+| Clave en `lab/params.json` | Valor inicial | Mínimo de la idea | Base |
 | --- | --- | --- | --- |
-| Mensajes de la campaña de muertes | 10 000 | 10 000 | idea |
-| Muertes forzadas | 30, de ellas ≥ 5 `post_250` | 25 | idea |
-| Política de reintento | primer reintento a 30 min, factor 2, máximo 3 h, vida 5 días | — | R-5321 §4.5.4.1 (≥ 30 min, dos intentos en la primera hora, luego cada 2–3 h, abandono a 4–5 días) |
-| Política de reintento en la campaña real | 1 s, factor 2, máximo 8 s, vida 10 min | — | supuesto: solo para que la corrida real drene; los parámetros deben ser configurables (R-5321 §4.5.4.1) |
-| Margen de aislamiento | p50 y p99 ≤ 1.10 × base | — | supuesto |
-| Umbral de pausa de tenant | rebote > 4 % sobre ventana de 200 resultados; pausa en ≤ 60 s virtuales | — | 4 %: R-RESEND-WARMUP; ventana y plazo: supuesto |
-| Plan de calentamiento por defecto | 150/250/400/700/1000/1500/2000 por día; 50/75/100/150 por hora en los días 4–7 | — | R-RESEND-WARMUP |
-| Memoria máxima | 8 GiB (falla si se supera) | 8 GiB | idea |
+| `campaign_messages` | 10 000 | 10 000 | idea |
+| `campaign_kills`, `campaign_kills_post_250` | 30 y 5 | 25 en total | idea |
+| `retry_policy` (`initial_s`, `factor`, `max_s`, `lifetime_s`) | 1 800, 2, 10 800, 432 000: primer reintento a 30 min, máximo 3 h, vida 5 días | — | R-5321 §4.5.4.1 (≥ 30 min, dos intentos en la primera hora, luego cada 2–3 h, abandono a 4–5 días) |
+| `campaign_retry_policy` | 1, 2, 8, 600 | — | supuesto: solo para que la corrida real drene; los parámetros deben ser configurables (R-5321 §4.5.4.1) |
+| `isolation_margin` | 1.10 (p50 y p99 ≤ 1.10 × base) | — | supuesto |
+| `tenant_bounce_threshold`, `tenant_window`, `tenant_pause_bound_s` | 0.04, 200 resultados, 60 s virtuales | — | 4 %: R-RESEND-WARMUP; ventana y plazo: supuesto |
+| `warmup_plan` | `daily` 150/250/400/700/1000/1500/2000; `hourly` sin tope los días 1–3 y 50/75/100/150 los días 4–7 | — | R-RESEND-WARMUP |
+| `warmup_share_tolerance` | 0.05 (diferencia absoluta entre la fracción enviada por IP y la del plan) | — | supuesto |
+| `memory_limit_bytes` | 8 589 934 592 (falla si se supera) | 8 GiB | idea |
 | Periodo de adaptación | declarado por perfil (`adaptation_period_s`) | — | supuesto por perfil |
 
 ## 6. Decisiones cerradas
@@ -294,7 +327,8 @@ Razón: el estado por destinatario es la unidad de la no pérdida; agrupar RCPT 
 
 **D14. Respuestas sin regla.**
 Decisión: una respuesta sin regla se clasifica `undetermined` y el motor la trata como transitoria hasta agotar la vida del mensaje.
-Razón: la idea pide no clasificarla nunca como permanente; reintentar hasta expirar no pierde el mensaje y termina en estado terminal.
+Las reglas genéricas por clase solo existen para 4xx (transitoria, R-3463); un 5xx sin regla específica también es `undetermined`.
+Razón: la idea pide no clasificarla nunca como permanente; reintentar hasta expirar no pierde el mensaje y termina en estado terminal. Un permanente erróneo suprime una dirección válida.
 
 **D15. Correlación entre motor y receptor.**
 Decisión: el motor agrega `X-Mtaproof-Id: <msg_id>` y un `Message-ID` derivado del `msg_id`; los `msg_id` son secuenciales por almacén.
