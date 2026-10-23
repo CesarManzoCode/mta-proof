@@ -1,0 +1,15 @@
+{
+  "name": "limits",
+  "description": "Un dominio por perfil de proveedor (gmail-model, yahoo-model, outlook-model) con la configuración de lab/engine.json. Llegan 18 mensajes por segundo durante unos 600 s virtuales, unos 360 por minuto a cada dominio: más que las tasas por IP de gmail-model y yahoo-model (300 por minuto, supuesto de sus perfiles) y más mensajes por conexión que el límite de yahoo-model. El motor choca con esos límites dentro del periodo de adaptación de 300 s y debe aprenderlos para no violarlos después; la llegada sigue después de ese periodo para que una violación contada sea posible.",
+  "engine": {"base": "lab/engine.json"},
+  "profiles": ["gmail-model", "yahoo-model", "outlook-model", "baseline"],
+  "tenants": [{"name": "acme", "from": "notify@baseline.test"}],
+  "domains": [
+    {"domain": "gmail-model.test"},
+    {"domain": "yahoo-model.test"},
+    {"domain": "outlook-model.test"}
+  ],
+  "messages": 10800,
+  "arrival": {"process": "poisson", "rate_per_s": 18},
+  "duration_s": 86400
+}

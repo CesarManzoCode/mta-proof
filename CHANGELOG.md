@@ -14,6 +14,10 @@
 - Entrega del motor y `mtaengine run --config lab/engine.json --db <engine.db>`: resolución MX contra el DNS configurado (MX implícito, null MX sin conexión, NXDOMAIN permanente, error temporal diferido), cliente SMTP detrás de una interfaz de transporte (TCP con IP de origen elegida), paso al siguiente MX ante falla de conexión, programador con una cola por (tenant, dominio) y turnos rotativos, límites de conexiones, mensajes por conexión y tasa por dominio, proveedor e IP, tenant e IP de origen, límites aprendidos ante throttling y ante el cierre silencioso de Yahoo, reintentos con calendario no decreciente y vida máxima, DSN `multipart/report` con reverse-path nulo al expirar y supresión por `NoEmail`.
 - Ejecutor real (`Deliverer`) y ejecutor de un hilo con reloj virtual (`Stepper`); en ambos el intento se confirma antes de tocar la red y su resultado antes de la siguiente acción sobre el mensaje.
 - Almacén: columna `messages.retries` (con migración de bases anteriores) y tabla `suppressions`.
+- Simulación determinista `mtadst run --scenario <archivo> --seed <n> --out <dir>`: motor y máquina de sesión del simulador en un proceso con reloj virtual; escribe `receiver.jsonl`, `messages/`, `engine.db`, `events.jsonl` canónico y `trace.sha256`. Misma semilla, misma traza byte a byte.
+- El `Stepper` del motor pasa a ser una cola de eventos ordenada por (tiempo virtual, secuencia); la conversación de cada conexión corre como corrutina y la latencia del perfil avanza el reloj virtual solo para esa conexión.
+- Formato de escenario `lab/scenarios/<nombre>.json` (tenants, dominios, perfiles, número de mensajes, llegadas de Poisson sembradas, configuración del motor y duración virtual) y escenarios `backoff`, `limits` y `determinism`.
+- `mtadst classify --corpus corpus/classification.json --out <archivo>`: una decisión del clasificador por caso del corpus (`id`, `class`, `subtype`, `rule_id`).
 
 ### Decisiones
 
@@ -31,3 +35,6 @@
 - Un mensaje expira en el diferimiento cuyo siguiente intento caería después de su vida, no después: ningún intento ocurre pasada la vida y los intervalos programados no decrecen.
 - Solo la expiración genera DSN; un rebote permanente queda en los eventos. La supresión es por tenant, como la lista de supresión de Resend por cuenta.
 - Las decisiones sin respuesta del receptor (NXDOMAIN, MX inutilizable, error temporal de DNS, MX inalcanzable, cierre silencioso, pérdida de conexión) llevan su propio `rule_id`, fuera de la tabla de respuestas del clasificador.
+- Modo simulado (contrato 2.2): el ejecutor reutiliza el cliente SMTP del motor, el analizador de respuestas, los códecs de DATA de los dos lados y el DNS de laboratorio contestado en proceso, para que lo simulado y lo real difieran solo en el transporte y el reloj. La red y el DNS no consumen tiempo virtual; solo la latencia declarada en un perfil.
+- En modo simulado el almacén usa `synchronous=OFF` (cambia D03 solo para `mtadst`): no muere ningún proceso, así que la durabilidad no cambia ninguna salida. Medido: el escenario `limits` baja de 54,8 s a 5,0 s con el mismo `trace.sha256`.
+- `events.jsonl` usa los escapes de `json.dumps` de Python (`ensure_ascii`), para que el verificador lo reconstruya desde `engine.db` con la biblioteca estándar y compare bytes.

@@ -167,10 +167,18 @@ type Store struct {
 // Open opens or creates the database at path. Every connection gets WAL
 // and synchronous=FULL through the DSN, so no pooled connection can commit
 // with weaker durability.
-func Open(path string) (*Store, error) {
+func Open(path string) (*Store, error) { return open(path, 2) }
+
+// OpenUnsynced opens the database like Open but with synchronous=OFF: a
+// commit does not wait for the disk. Only the simulated executor uses it:
+// no process dies in mtadst, so durability changes no output, while the
+// order and content of the commits stay those of Open.
+func OpenUnsynced(path string) (*Store, error) { return open(path, 0) }
+
+func open(path string, synchronous int) (*Store, error) {
 	q := url.Values{}
 	q.Add("_pragma", "journal_mode(WAL)")
-	q.Add("_pragma", "synchronous(FULL)")
+	q.Add("_pragma", fmt.Sprintf("synchronous(%d)", synchronous))
 	q.Add("_pragma", "busy_timeout(10000)")
 	q.Add("_txlock", "immediate")
 	db, err := sql.Open("sqlite", "file:"+path+"?"+q.Encode())
@@ -194,9 +202,9 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	if mode != "wal" || sync != 2 {
+	if mode != "wal" || sync != synchronous {
 		db.Close()
-		return nil, fmt.Errorf("store: journal_mode=%s synchronous=%d, want wal and 2 (FULL)", mode, sync)
+		return nil, fmt.Errorf("store: journal_mode=%s synchronous=%d, want wal and %d", mode, sync, synchronous)
 	}
 	return s, nil
 }

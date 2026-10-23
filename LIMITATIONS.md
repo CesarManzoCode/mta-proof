@@ -25,3 +25,5 @@ Fuente única de lo que este proyecto no demuestra. Ningún otro documento repit
 - Se implementa sobre RFC 5321, RFC 5322 y los RFC vigentes citados; no sobre borradores (RFC 5321bis, DKIM2, APRF).
 - La validación externa observa al MTA externo solo desde el receptor; las propiedades que necesitan su estado interno quedan sin evaluar.
 - El determinismo bit a bit vale para el modo simulado (reloj virtual); las corridas reales con fallas se verifican por propiedades, no por hash.
+- El determinismo se midió con el mismo binario (Go 1.27.3, amd64) en esta máquina. No se afirma entre versiones de Go ni arquitecturas: las llegadas usan aritmética de punto flotante y los generadores de `math/rand/v2`, y las trazas usan el codificador JSON de Go.
+- En modo simulado la red y el DNS no consumen tiempo virtual; solo pasa el tiempo que un perfil declara con `latency`. Los perfiles actuales no declaran latencia, así que en ellos toda una conversación SMTP ocurre en un instante virtual. Cuando una latencia supera el plazo del motor, el receptor anota el cierre al vencer el plazo, no cuando habría intentado responder.

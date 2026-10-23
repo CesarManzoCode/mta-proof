@@ -74,8 +74,14 @@ func (c *tcpConn) deadline(d time.Duration) {
 	}
 }
 
-func (c *tcpConn) read() (Reply, error) {
-	code, msg, err := c.tp.ReadResponse(0)
+func (c *tcpConn) read() (Reply, error) { return ReadReply(&c.tp.Reader) }
+
+// ReadReply reads one reply, single or multi-line, and splits it with
+// parseReply. An error means no complete reply arrived. The in-process
+// transport of mtadst reads the simulator's wire bytes with it, so both
+// executors parse replies the same way.
+func ReadReply(r *textproto.Reader) (Reply, error) {
+	code, msg, err := r.ReadResponse(0)
 	if err != nil {
 		var te *textproto.Error
 		if !errors.As(err, &te) {

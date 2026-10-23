@@ -222,6 +222,14 @@ func readLine(br *bufio.Reader) (string, bool, error) {
 	return string(bytes.TrimRight(line, "\r\n")), false, nil
 }
 
+// DecodeData undoes the DATA encoding of wire, everything after the 354 up
+// to and including the "." line, exactly as the socket server does; the
+// in-process transport of mtadst feeds sessions through it. A message
+// above the server's size cap is reported as oversize.
+func DecodeData(wire []byte) ([]byte, bool, error) {
+	return readData(bufio.NewReaderSize(bytes.NewReader(wire), maxCommandLine), maxMessage)
+}
+
 // readData reads message data up to the "." line and undoes the dot
 // stuffing of RFC 5321 §4.5.2, keeping line endings as received.
 func readData(br *bufio.Reader, max int) ([]byte, bool, error) {

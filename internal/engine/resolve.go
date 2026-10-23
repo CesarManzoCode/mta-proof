@@ -49,6 +49,10 @@ type Resolver interface {
 type DNSResolver struct {
 	Server  string // "ip:port"
 	Timeout time.Duration
+	// Exchange, when set, answers queries in process instead of the
+	// network: mtadst passes the lab zone, so both executors share the
+	// interpretation of the answers.
+	Exchange func(ctx context.Context, m *dns.Msg) (*dns.Msg, error)
 }
 
 var errNX = errors.New("nxdomain")
@@ -61,11 +65,17 @@ func (r *DNSResolver) query(ctx context.Context, name string, qtype uint16) ([]d
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
-	c := &dns.Client{Net: "udp", Timeout: timeout}
-	in, _, err := c.ExchangeContext(ctx, m, r.Server)
-	if err == nil && in.Truncated {
-		c.Net = "tcp"
+	var in *dns.Msg
+	var err error
+	if r.Exchange != nil {
+		in, err = r.Exchange(ctx, m)
+	} else {
+		c := &dns.Client{Net: "udp", Timeout: timeout}
 		in, _, err = c.ExchangeContext(ctx, m, r.Server)
+		if err == nil && in.Truncated {
+			c.Net = "tcp"
+			in, _, err = c.ExchangeContext(ctx, m, r.Server)
+		}
 	}
 	if err != nil {
 		return nil, err

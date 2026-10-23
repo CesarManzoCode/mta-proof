@@ -29,6 +29,21 @@ func TestOpenSetsWALAndFull(t *testing.T) {
 	}
 }
 
+func TestOpenUnsyncedKeepsWAL(t *testing.T) {
+	s, err := OpenUnsynced(filepath.Join(t.TempDir(), "engine.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	mode, sync, err := s.Pragmas()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode != "wal" || sync != 0 {
+		t.Fatalf("journal_mode=%s synchronous=%d, want wal and 0", mode, sync)
+	}
+}
+
 // The events table has exactly the columns of contract 3.3, in order.
 func TestEventsColumns(t *testing.T) {
 	s, _ := openTemp(t)

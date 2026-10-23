@@ -36,6 +36,15 @@ Módulo Go: `github.com/CesarManzoCode/mta-proof`.
 - Dos ejecutores: **real** (goroutines, sockets TCP, reloj de pared) y **simulado** (cola de eventos con reloj virtual; la conversación SMTP se ejecuta en proceso contra la máquina de estados de sesión del simulador; la latencia la decide el perfil y avanza el reloj virtual).
 - En modo simulado, misma semilla y mismo escenario producen la misma traza byte a byte.
 
+Diseño del ejecutor simulado (k1-05):
+
+- Es el `Stepper` del motor: una cola de eventos ordenada por (`at_ms` virtual, secuencia de inserción). Un evento es una pasada del programador (`Dispatch`), una acción del núcleo (resolver, abrir, una transacción, cerrar), una entrada externa (llegada de un mensaje) o la reanudación de una conexión que esperaba. Tras cada evento se confirman las escrituras del núcleo y se encolan, en orden, las acciones que devolvió y una pasada del programador en el mismo instante.
+- La conversación de cada conexión (`openConn`, `transact`, `quit`, el mismo código del ejecutor real) corre como corrutina (`iter.Pull` de la biblioteca estándar): solo avanza cuando el `Stepper` la reanuda y le devuelve el control cuando el transporte espera. Nunca corren dos piezas de código a la vez, así que ninguna goroutine decide el orden de la salida.
+- El transporte en proceso (`internal/dst`) abre una sesión de `internal/sim` en el host dueño de la dirección destino según la zona, como `mtasim` escucha en ella; las órdenes y los datos pasan por la máquina de sesión, los datos se codifican y decodifican con los mismos códecs de los dos lados del socket, y la respuesta vuelve como bytes de la red leídos por el lector de respuestas del motor. Una dirección sin host servido rechaza la conexión.
+- Tiempo: la transferencia por la red y el DNS (la zona de laboratorio contestada en proceso por el mismo código del servidor DNS) no consumen tiempo virtual; la latencia `latency` del perfil sí: la conexión que espera la respuesta duerme ese tiempo y las demás siguen. Una latencia mayor que el plazo del motor (`timeouts.command_s`, `data_end_s`) corta la conexión al vencer el plazo.
+- Flujos de azar: `engine.core` y `engine.mx` del motor y `dst.arrivals` de las llegadas, todos derivados de la semilla de la corrida (`--seed` reemplaza `seed` de la configuración).
+- Fin: la corrida termina cuando no queda ningún evento o al llegar a `duration_s`. Las sesiones aún abiertas reciben un `drop` con regla `shutdown`, como al detener `mtasim`, y un intento a medio camino queda `inflight`, como tras una muerte.
+
 ### 2.3 Procesos en modo real y plan de direcciones
 
 Toda corrida real ocurre dentro de un espacio de nombres de usuario, red y montaje sin privilegios (`unshare --user --map-root-user --net --mount`), con solo la interfaz `lo`. Así el tráfico no puede salir de la máquina y los puertos 25 y 53 se pueden abrir sin root (medido en esta máquina, ver RESEARCH, «Mediciones»).
@@ -54,10 +63,14 @@ Toda corrida real ocurre dentro de un espacio de nombres de usuario, red y monta
 - `mtasim serve --out <dir> [--dns 127.0.0.1:53] [--smtp-port 25] [--profiles profiles] [--zone lab/zone.json] [--control <dir>/control.sock]`: cada host de cada perfil escucha en sus direcciones A de la zona (3.9) y en el puerto indicado; imprime `ready` en la salida estándar cuando todo escucha. Fuera del espacio de nombres se prueba con puertos altos, porque Linux enruta todo `127.0.0.0/8` por `lo`.
 - `mtaengine serve --db <engine.db> [--http 127.0.0.1:8025] [--seed 1] [--max-batch 256]` (diseño, k1-02): recupera el almacén, confirma los eventos `recovered`, abre la API de ingreso (3.10) e imprime `ready` cuando escucha.
 - `mtaengine run --config <engine.json> --db <engine.db>` (diseño, k1-04): lo mismo que `serve` más la entrega (2.6), con la configuración del archivo; la del laboratorio es `lab/engine.json`.
+- `mtadst run --scenario <archivo> --seed <n> --out <dir> [--root .] [--research vault/RESEARCH.md]` (diseño, k1-05): ejecuta un escenario (3.11) en modo simulado y escribe en `<dir>`, que debe no existir o estar vacío, los archivos de 3.6; imprime un resumen JSON (estados finales, eventos, tiempo virtual y de pared, `trace_sha256`). No abre sockets.
+- `mtadst classify --corpus corpus/classification.json --out <archivo>` (diseño, k1-05): clasifica cada caso del corpus (3.8) con la tabla del motor y escribe una línea JSON por caso, en el orden del corpus, con `id`, `class`, `subtype` y `rule_id`; no copia lo esperado.
 
 ### 2.4 Almacén
 
 SQLite mediante `modernc.org/sqlite` (Go puro, sin CGO), en modo WAL con `synchronous=FULL`. El motor responde 202 al ingreso solo después del commit; registra el resultado de un intento en una transacción antes de considerarlo hecho. Se permite agrupar commits (group commit) de peticiones concurrentes.
+
+En modo simulado (`mtadst`, k1-05) el almacén usa WAL con `synchronous=OFF`: allí no muere ningún proceso, así que la durabilidad no cambia ninguna salida, y el orden y el contenido de los commits son los mismos. Medido: el escenario `limits` tarda 54,8 s con `FULL` y 5,0 s con `OFF` en el disco de esta máquina, con el mismo `trace.sha256` (RESEARCH, «Mediciones»).
 
 Diseño (k1-02):
 
@@ -96,7 +109,7 @@ Diseño (k1-02):
 
 **Supresión**: un `bounced` con subtipo `NoEmail` suprime el par (tenant, dirección) (parte local tal cual, dominio en minúsculas) en la tabla `suppressions`; un mensaje posterior a esa dirección del mismo tenant termina `suppressed` al llegar su turno, sin intento, con `detail.suppressed_by`.
 
-**Durabilidad y orden**: el núcleo inicia el intento (`attempt_started`) dentro de la misma operación que decide enviarlo, y el ejecutor no toca la red hasta que esa operación está confirmada; el resultado de la transacción (`delivered`, `deferred`, `bounced`, `expired`) se confirma antes de que la conexión o el programador hagan otra cosa con ese mensaje. Un 250 recibido y no confirmado deja el mensaje `inflight`: la recuperación lo reencola y el reenvío es el duplicado acotado de 4. Ejecutores: `Deliverer` (real: una goroutine por conexión y por resolución, todo a través del `Runner` de 2.4) y `Stepper` (un hilo, reloj virtual, una acción a la vez en orden FIFO y commit tras cada paso; lo usa k1-05).
+**Durabilidad y orden**: el núcleo inicia el intento (`attempt_started`) dentro de la misma operación que decide enviarlo, y el ejecutor no toca la red hasta que esa operación está confirmada; el resultado de la transacción (`delivered`, `deferred`, `bounced`, `expired`) se confirma antes de que la conexión o el programador hagan otra cosa con ese mensaje. Un 250 recibido y no confirmado deja el mensaje `inflight`: la recuperación lo reencola y el reenvío es el duplicado acotado de 4. Ejecutores: `Deliverer` (real: una goroutine por conexión y por resolución, todo a través del `Runner` de 2.4) y `Stepper` (simulado: un hilo lógico, reloj virtual, cola de eventos ordenada por tiempo y secuencia, un evento a la vez y commit tras cada uno; ver 2.2).
 
 **Eventos de un intento**: `attempt_started` (en conexión nueva sin `mx_host`), `routed` (`mx_host` y `detail`: `conn`, y `mx` en orden, `addr` y `tried` con las direcciones fallidas en conexión nueva, o `reused` en conexión reusada), `classified` si hubo rechazo, y el resultado. `detail` del resultado: `conn` y `stage` (`connect`, `ehlo`, `mail`, `rcpt`, `data`, `data_end`), `error` si no hubo respuesta, `learned`, `suppressed`.
 
@@ -213,6 +226,8 @@ En modo real, `at_ms` de los tres registros son milisegundos de reloj de pared (
 
 Cada escenario escribe `out/runs/<escenario>-<semilla>/` con `receiver.jsonl`, `engine.db`, `harness.jsonl` (si hubo fallas), `messages/` y, en modo simulado, `events.jsonl` (exportación canónica de `events`: una fila por línea, ordenada por `seq`, objeto JSON con claves ordenadas y separadores `,` y `:` sin espacios) y `trace.sha256` (hex del sha256 de los bytes de `receiver.jsonl` seguidos de los de `events.jsonl`). `out/` no se versiona.
 
+Diseño (k1-05): cada línea de `events.jsonl` tiene todas las columnas de 3.3, `NULL` como `null`, enteros sin decimales y cadenas con los escapes de `json.dumps` de Python con `ensure_ascii` (`\"`, `\\`, `\n`, `\r`, `\t`, `\b`, `\f` y todo otro carácter fuera de espacio..`~` como `\uXXXX`, con pares sustitutos sobre U+FFFF); es decir, los bytes de `json.dumps(dict(fila), sort_keys=True, separators=(",", ":"))` de cada fila leída con `sqlite3`, así el verificador la reconstruye desde `engine.db` sin código del motor. `detail` va como la cadena guardada. `trace.sha256` contiene el hex seguido de un salto de línea.
+
 ### 3.7 Reporte (`out/report.json`)
 
 ```json
@@ -289,6 +304,32 @@ Los subtipos de las reglas de proveedor son diseño: las fuentes dan el texto, n
 - Respuestas: 202 `{"id": "<msg_id>"}` después del commit; 400 y 409 `{"error": ...}`; 503 si el motor se detuvo.
 - `msg_id`: `m` seguido del número secuencial del almacén con al menos ocho dígitos (`m00000001`); sigue tras reiniciar sin huecos (D15).
 - Mensaje: cabeceras `Date` (instante del ingreso en UTC, `Thu, 22 Oct 2026 13:05:09 +0000`) [R-5322 §3.3, §3.6.1], `From`, `To`, `Subject`, `Message-ID: <msg_id.mtaproof@dominio-del-from>` [R-5322 §3.6.4], `X-Mtaproof-Id: <msg_id>`, `MIME-Version: 1.0`, `Content-Type: text/plain; charset=utf-8` y `Content-Transfer-Encoding: quoted-printable`; líneas CRLF.
+
+### 3.11 Escenario del modo simulado (`lab/scenarios/<nombre>.json`, diseño k1-05)
+
+```json
+{
+  "name": "backoff",
+  "description": "texto libre",
+  "engine": {"base": "lab/engine.json", "set": {"retry_policy": {"lifetime_s": 3600}}},
+  "zone": "lab/zone.json",
+  "profiles_dir": "profiles",
+  "profiles": ["always-defer", "baseline"],
+  "tenants": [{"name": "acme", "from": "notify@baseline.test", "msg_type": "transactional", "weight": 1}],
+  "domains": [{"domain": "always-defer.test", "local_prefix": "user", "recipients": 0, "weight": 1}],
+  "messages": 3,
+  "arrival": {"process": "poisson", "rate_per_s": 0.01, "start_s": 0},
+  "duration_s": 518400
+}
+```
+
+- El cargador rechaza campos desconocidos. Las rutas son relativas a la raíz del repositorio (`--root`). Por defecto: `engine.base` `lab/engine.json`, `zone` `lab/zone.json`, `profiles_dir` `profiles`, `msg_type` `transactional`, `local_prefix` `user`, pesos 1.
+- `engine`: la configuración del motor (2.6) es `base` con `set` encima: los objetos se mezclan clave a clave y cualquier otro valor reemplaza al de la base; el resultado pasa por el cargador del motor.
+- `profiles`: los perfiles que sirve el receptor; los hosts de los demás rechazan la conexión.
+- Llegadas: proceso de Poisson sembrado con el flujo `dst.arrivals`: huecos exponenciales de media `1/rate_per_s` segundos desde `start_s`. Por mensaje, en este orden: el hueco, el tenant y el dominio (por peso) y, si el dominio tiene `recipients` > 0, el número del destinatario en `[0, recipients)`; con 0, el número es el del mensaje y cada destinatario es nuevo. Destinatario `<local_prefix><n>@<dominio>`, asunto `Scenario <nombre> message <i>` y texto `Message <i> of scenario <nombre>.`.
+- `duration_s`: tiempo virtual máximo; el reloj empieza en 0.
+
+Escenarios iniciales: `backoff` (un dominio con `always-defer` y el calendario de `lab/engine.json` hasta expirar, con remitente en `baseline.test` para recibir los DSN), `limits` (un dominio por perfil de proveedor con llegadas por encima de sus tasas, que siguen después del periodo de adaptación) y `determinism` (mezcla de casi todos los caminos del motor en una hora virtual).
 
 ## 4. Propiedades
 
@@ -400,7 +441,7 @@ Decisión: procesos separados en modo real (`mtasim`, `mtaengine`, orquestador P
 Razón: el verificador observa solo desde el receptor y el registro, como pide la idea, y los formatos fijos permiten decidir cada propiedad sobre bytes crudos.
 
 **D03. Almacén durable.**
-Decisión: SQLite (`modernc.org/sqlite` v1.61.0) en WAL con `synchronous=FULL` y commits agrupados.
+Decisión: SQLite (`modernc.org/sqlite` v1.61.0) en WAL con `synchronous=FULL` y commits agrupados. En modo simulado, `synchronous=OFF` (k1-05, 2.4).
 Razón: medido en esta máquina: 30 `kill -9` aleatorios durante escrituras confirmadas, 0 pérdidas e integridad correcta; ~709 commits/s con FULL (por eso se agrupan). Postgres no está instalado y no hace falta para una sola máquina.
 
 **D04. Orden de las fases.**
@@ -408,8 +449,8 @@ Decisión: K1 núcleo (simulador, motor, clasificación, backoff, DNS, determini
 Razón: cada K deja `make verify` pasando con más propiedades; los mutantes van al final porque necesitan todas las propiedades que deben hacer caer.
 
 **D05. Reloj virtual y determinismo.**
-Decisión: núcleo de un hilo con `Clock` y `math/rand/v2` sembrado inyectados; ejecutor simulado con cola de eventos ordenada por (tiempo, secuencia); flujos de azar derivados por componente desde la semilla.
-Razón: elimina el no determinismo del planificador de goroutines y permite probar días de backoff en segundos.
+Decisión: núcleo de un hilo con `Clock` y `math/rand/v2` sembrado inyectados; ejecutor simulado con cola de eventos ordenada por (tiempo, secuencia); flujos de azar derivados por componente desde la semilla. La conversación SMTP de cada conexión corre como corrutina del ejecutor (k1-05, 2.2), para que la latencia de una conexión no detenga a las demás sin introducir concurrencia real.
+Razón: elimina el no determinismo del planificador de goroutines y permite probar días de backoff en segundos. Medido en k1-05: el escenario `backoff` simula 4,9 días en 63 ms de reloj, y diez corridas por escenario con `GOMAXPROCS` distinto dan un solo `trace.sha256` (RESEARCH, «Mediciones»).
 
 **D06. Inyección de fallas y aislamiento de red.**
 Decisión: `unshare --user --map-root-user --net --mount` para cada corrida; señales `SIGKILL`/`SIGSTOP` para muertes; socket de control del simulador para cortes, cambios de perfil y la ventana `post_250`; `tc netem` solo si un escenario lo pide.

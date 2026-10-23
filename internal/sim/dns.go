@@ -172,25 +172,28 @@ func splitTXT(s string) []string {
 }
 
 // ServeDNS answers authoritatively for test. and refuses everything else.
-func (z *Zone) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
+func (z *Zone) ServeDNS(w dns.ResponseWriter, req *dns.Msg) { w.WriteMsg(z.Answer(req)) }
+
+// Answer builds the reply to req, the same on the network and in process
+// (mtadst).
+func (z *Zone) Answer(req *dns.Msg) *dns.Msg {
 	m := new(dns.Msg)
 	m.SetReply(req)
-	defer w.WriteMsg(m)
 	if req.Opcode != dns.OpcodeQuery || len(req.Question) != 1 {
 		m.Rcode = dns.RcodeNotImplemented
-		return
+		return m
 	}
 	q := req.Question[0]
 	name := strings.ToLower(q.Name)
 	if q.Qclass != dns.ClassINET || (name != zoneApex && !strings.HasSuffix(name, "."+zoneApex)) {
 		m.Rcode = dns.RcodeRefused
-		return
+		return m
 	}
 	m.Authoritative = true
 	if !z.exists[name] {
 		m.Rcode = dns.RcodeNameError
 		m.Ns = []dns.RR{z.soa()}
-		return
+		return m
 	}
 	if name == zoneApex && (q.Qtype == dns.TypeSOA || q.Qtype == dns.TypeANY) {
 		m.Answer = append(m.Answer, z.soa())
@@ -205,6 +208,7 @@ func (z *Zone) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	if len(m.Answer) == 0 {
 		m.Ns = []dns.RR{z.soa()}
 	}
+	return m
 }
 
 // DNSServer serves a zone on UDP and TCP at the same address.

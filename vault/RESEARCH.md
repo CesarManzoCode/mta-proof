@@ -69,6 +69,10 @@ Arch Linux, kernel 7.2.10, 12 CPU, 14 GiB visibles, disco `/home` SSD.
 | Commits agrupados (`TestAPIGroupCommit`, 32 clientes) | 640 operaciones en 42 commits | 2.4 |
 | Mensaje generado leído con `email.message_from_bytes(..., policy=email.policy.strict)` de Python 3.14.8 | sin defectos ni excepción | 3.10 |
 | `npm install Haraka@3.3.5` y `haraka --version` | funciona con Node 26.12.0; el script de instalación de `modern-syslog` queda bloqueado y no se usa | D08 |
+| `mtadst run` del escenario `limits` (10 800 mensajes, 51 592 eventos, semilla 1) en `/home`, 2026-10-23, kernel 7.2.11 | `synchronous=FULL`: 54,8 s; `synchronous=OFF`: 5,0 s; mismo `trace.sha256` (`12fe285e…`) con los dos | 2.4 (modo simulado) |
+| `mtadst run` del escenario `backoff` (semilla 1) en `/home` | 3 mensajes, 4,9 días virtuales (`virtual_ms` 423 315 474), 41 reintentos por mensaje, expiración y DSN: 63 ms de reloj | 2.2, D05 |
+| Diez corridas `mtadst run` por escenario (`determinism` y `backoff`, semilla 7) con `GOMAXPROCS` 1, 8 y 15, y tres de `limits` (semilla 3) con 5, 10 y 15 | un solo `trace.sha256` por escenario | 2.2, D05 |
+| `events.jsonl` de `determinism` contra `json.dumps(dict(fila), sort_keys=True, separators=(",", ":"))` de Python 3.14.8 sobre `engine.db` | idénticos byte a byte (también lo comprueba `TestEventsMatchPython`) | 3.6 |
 
 ## Huecos que siguen abiertos
 
