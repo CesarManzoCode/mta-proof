@@ -1,6 +1,6 @@
 # Changelog
 
-## [K2] - sin cerrar
+## [K2] - 2026-10-23
 
 ### Añadido
 
@@ -40,6 +40,10 @@
 - Los filtros de `timeline` eligen mensajes, no eventos: un mensaje entra si alguno de sus eventos cumple todos los filtros y siempre sale completo, porque una línea de tiempo recortada no es causal.
 - `debug_timeline` asigna cada `data_end` del receptor al último intento iniciado antes, por el reloj de pared común (3.6): los `conn` del motor y del receptor son contadores distintos y no se pueden cruzar. Un intento cuyo final el motor no vio (muerte o conexión perdida tras el punto final de DATA) admite cero o un `data_end`, porque el receptor pudo aceptar antes de la falla, el mismo caso que `bounded_duplicates`.
 - `debug_aggregates` compara contra un `GROUP BY` escrito en el verificador, no contra un recuento del propio `mtaq`; las consultas filtradas usan el valor más frecuente de cada columna en la corrida, para no depender de cifras exactas que cambian entre corridas reales de la misma semilla.
+
+### Verificación
+
+- Al cerrar K2, `make check` y `make verify` pasan con las dieciocho propiedades de K1 y K2: ninguna IP supera los topes de su plan de calentamiento y la desconocida recibe más estrangulamiento, el tenant que supera el umbral de rebote queda pausado sin intentos, los demás destinos no empeoran con uno estrangulado, la política TLS se cumple con certificados inválidos, el correo bien configurado pasa SPF, DKIM y DMARC y el roto rebota en un solo intento, los mensajes capturados no tienen defectos RFC 5322 y `mtaq` coincide con los registros crudos. Las propiedades de K1 siguen pasando. Cifras de la corrida del último mini sprint (k2-05); ver «Resultados de K2» en el README.
 
 ## [K1] - 2026-10-23
 

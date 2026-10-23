@@ -91,7 +91,7 @@ En la corrida de K2, `m00001230` tiene dos intentos: el primero `interrupted` (e
 | --- | --- | --- |
 | K0 | Contrato, investigación y plan | hecho |
 | K1 | Simulador, motor, clasificación, backoff, DNS, determinismo, no pérdida bajo `kill -9` | Cerrada |
-| K2 | Pools y calentamiento, tenants, aislamiento, TLS, autenticación, depuración | Implementada (los cinco mini sprints); cierre pendiente |
+| K2 | Pools y calentamiento, tenants, aislamiento, TLS, autenticación, depuración | Cerrada |
 | K3 | Mutantes, validación externa con Haraka, licencias | pendiente |
 
 ## Resultados
@@ -117,7 +117,12 @@ El registro del cierre anota el veredicto de cada criterio, no sus cifras. Las d
 
 ### Resultados de K2
 
-`make verify` del último mini sprint de K2 (k2-05), 2026-10-23, en la misma máquina, sobre `a9d1fe8` con el árbol de trabajo de k2-05 (el `git_head` del reporte): veredicto global `pass` en las dieciocho propiedades. Cifras de su `out/report.json`:
+Cierre de K2, 2026-10-23, sobre el commit `9faea41`, en la misma máquina:
+
+- `make check` sale con 0: pasan los ocho paquetes Go con pruebas (`auth`, `classify`, `clock`, `dst`, `engine`, `mtaq`, `sim`, `store`) y las 126 pruebas del verificador.
+- Pasan los ocho criterios de salida de K2, recalculados sobre `out/report.json` de `make verify` y sus archivos crudos: calentamiento de IPs, pausa por tenant, aislamiento entre destinos, TLS, autenticación, formato RFC 5322, depuración con `mtaq` y regresión de K1. Siguen pasando los once criterios de K1 y los nueve de K0.
+
+El registro del cierre anota el veredicto de cada criterio, no sus cifras. Las de la tabla son del `out/report.json` del `make verify` del último mini sprint (k2-05), sobre `a9d1fe8` con el árbol de trabajo de k2-05 (el `git_head` del reporte; k2-05 se confirmó después como `9faea41`): veredicto global `pass` en las dieciocho propiedades.
 
 | Medida | Valor |
 | --- | --- |
