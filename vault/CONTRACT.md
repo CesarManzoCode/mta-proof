@@ -51,6 +51,7 @@ Toda corrida real ocurre dentro de un espacio de nombres de usuario, red y monta
 - Todos los nombres de laboratorio cuelgan de `.test` (reservado por RFC 6761). Las direcciones de correo son sintéticas.
 - El orquestador monta un `resolv.conf` propio (`nameserver 127.0.0.1`) solo dentro del espacio de nombres; el motor no depende de él (consulta a la dirección configurada), el MTA externo sí.
 - `mtasim` abre un socket de control Unix por corrida para: cambiar de perfil en caliente, cortar conexiones y retener la respuesta 250 de un mensaje (ver 4.4).
+- `mtasim serve --out <dir> [--dns 127.0.0.1:53] [--smtp-port 25] [--profiles profiles] [--zone lab/zone.json] [--control <dir>/control.sock]`: cada host de cada perfil escucha en sus direcciones A de la zona (3.9) y en el puerto indicado; imprime `ready` en la salida estándar cuando todo escucha. Fuera del espacio de nombres se prueba con puertos altos, porque Linux enruta todo `127.0.0.0/8` por `lo`.
 
 ### 2.4 Almacén
 
@@ -90,6 +91,23 @@ SQLite mediante `modernc.org/sqlite` (Go puro, sin CGO), en modo WAL con `synchr
 - Tipos de regla mínimos: `max_msgs_per_conn`, `rate` (por IP de origen y por perfil), `concurrency` (por IP de origen), `unknown_ip` (límites más estrictos para IPs fuera de su lista de conocidas), `respond` (respuesta fija por condición), `drop_mid_data`, `latency`, `auth` (SPF/DKIM/DMARC).
 - Las respuestas usan solo los códigos y textos de la tabla 3.2. Perfiles mínimos: `gmail-model`, `yahoo-model`, `outlook-model`, `baseline` (acepta todo, RFC 5321) y `always-defer` (responde `451 4.3.0` al final de DATA, para que el receptor vea el `msg_id` de cada intento).
 - Una violación es un comando aceptado por encima de un límite del perfil, ocurrido después de `adaptation_period_s` contados desde la primera conexión de esa IP de origen a ese perfil. El simulador responde a la violación según `on_violation` y la anota en su registro con el id de la regla.
+
+Parámetros por tipo (diseño, k1-01). Los límites cuentan solo comandos aceptados; el comando que excede el límite es la violación.
+
+| Tipo | `params` | Dónde se evalúa | Violación |
+| --- | --- | --- | --- |
+| `max_msgs_per_conn` | `limit` | `MAIL` con `limit` mensajes ya aceptados en la conexión | sí |
+| `rate` | `scope` (`src_ip`, `profile` o `rcpt`), `limit`, `per_s` | Ventana deslizante de `per_s` segundos: `MAIL` para `src_ip` y `profile`, `RCPT` (por destinatario) para `rcpt` | sí |
+| `concurrency` | `limit` | Conexión nueva con `limit` conexiones ya abiertas desde la misma IP de origen | sí |
+| `unknown_ip` | `known_ips` (direcciones o prefijos) y al menos uno de `max_msgs_per_conn`, `rate` (`limit`, `per_s`, `scope` opcional, por defecto `src_ip`) y `concurrency` | Como cada límite, solo para IPs de origen fuera de `known_ips` | sí, con el id de la regla `unknown_ip` |
+| `respond` | `stage` (`connect`, `mail`, `rcpt`, `data_end`), `match` (`rcpt_local_prefix`, `rcpt_domain`, `mail_from_domain`, `src_ips`; vacío coincide siempre), `response`, `close` | Primera regla del perfil que coincide | no |
+| `drop_mid_data` | `every_n` (por defecto 1; contador de `DATA` por perfil), `after_bytes` | Tras el 354 lee como máximo `after_bytes` de datos y cierra sin respuesta ni `data_end` | no |
+| `latency` | `stage` (`connect`, `ehlo`, `mail`, `rcpt`, `data`, `data_end`, `any`), `ms` | Se suma antes de enviar la respuesta; en `mtadst` avanza el reloj virtual | no |
+| `auth` | `require` (`spf`, `dkim`, `dmarc`), `fail_response`, `dmarc_reject_response` | Se acepta y valida; se aplica desde k2-04 | no |
+
+- `on_violation.action` ∈ `close_silent` (cierra sin respuesta), `respond` (responde y sigue) y `respond_close` (responde y cierra), con `response` en los dos últimos. Un 421 siempre cierra [R-5321 §3.8] y una violación al conectar también.
+- El cargador rechaza campos desconocidos, una respuesta que no sea exactamente una fila de 3.2 (código, código extendido y texto; `556 5.1.10` es solo del motor), una regla cuyo `source` no esté en `sources` del perfil y una respuesta cuya fuente en 3.2 no esté en `sources`. Exige `limitations` si alguna fuente del perfil es secundaria en RESEARCH o alguna respuesta viene de una fuente secundaria. Los marcadores `domain-name` y `<domain>` se sustituyen al responder por el dominio del `MAIL FROM`.
+- El nombre del perfil es el nombre del archivo. Un host pertenece a un solo perfil; un perfil sin `hosts` solo se usa por cambio en caliente.
 
 ### 3.2 Respuestas documentadas
 
@@ -134,7 +152,9 @@ Una línea JSON por evento, en orden de escritura, con `fsync` al cerrar cada re
 
 `seq`, `at_ms`, `conn`, `src_ip`, `dst_ip`, `host`, `profile`, `ev` (`connect`, `ehlo`, `starttls`, `mail`, `rcpt`, `data_end`, `reply`, `close`, `drop`, `violation`), y según el evento `mail_from` (cadena vacía para el reverse-path nulo), `rcpt`, `msg_id` (cabecera `X-Mtaproof-Id`), `sha256` del mensaje, `code`, `enhanced`, `text`, `rule`, `tls` y `auth` (`spf`, `dkim`, `dmarc`, cada uno `pass` o `fail`).
 
-- `data_end` es una línea por cada DATA terminado y lleva la respuesta final a DATA (`code`, `enhanced`, `text`) junto con `msg_id` y `sha256`. `reply` es la respuesta a cualquier otro comando.
+- `data_end` es una línea por cada DATA terminado y lleva la respuesta final a DATA (`code`, `enhanced`, `text`) junto con `msg_id` y `sha256`, además de `mail_from` y `rcpt` (destinatarios unidos por comas). Se escribe y se sincroniza antes de enviar la respuesta. `reply` es la respuesta a cualquier otro comando y al saludo (220 o la respuesta de una regla al conectar).
+- `ehlo`, `mail` y `rcpt` se anotan solo para comandos bien formados y en secuencia; un comando rechazado por sintaxis o secuencia deja solo su `reply`.
+- `close`: la conexión terminó tras una respuesta (`QUIT`, 421, `close`) o la cerró el cliente. `drop`: el simulador la terminó sin respuesta; `rule` es el id de la regla, `control.cut` (corte por el socket de control) o `shutdown`.
 - `violation` lleva `rule` y `counted` (`false` dentro del periodo de adaptación, `true` después).
 - El mensaje recibido se guarda además como `messages/<sha256>.eml`.
 
@@ -172,6 +192,20 @@ Cada escenario escribe `out/runs/<escenario>-<semilla>/` con `receiver.jsonl`, `
 Lista de casos `{"id", "provider", "code", "enhanced", "text", "expected_class", "expected_subtype", "source"}`. Incluye como mínimo cada fila de 3.2 y un caso sin regla que espera `undetermined`.
 
 Clases: `permanent`, `transient`, `undetermined`. Subtipos: los de Resend (`General`, `NoEmail`, `MailboxFull`, `MessageTooLarge`, `ContentRejected`, `AttachmentRejected`) [R-RESEND-BOUNCES] más los del proyecto: `RateLimited`, `Reputation`, `AuthConfig`, `TLSPolicy`, `NullMX`, `Connection`.
+
+### 3.9 Zona de laboratorio (`lab/zone.json`)
+
+```json
+{"ttl": 300, "records": [
+  {"name": "gmail-model.test", "type": "MX", "pref": 10, "host": "mx1.gmail-model.test"},
+  {"name": "mx1.gmail-model.test", "type": "A", "addr": "127.0.1.1"},
+  {"name": "nullmx.test", "type": "MX", "pref": 0, "host": "."},
+  {"name": "sender.test", "type": "TXT", "text": "v=spf1 ..."}
+]}
+```
+
+- Tipos `A`, `MX` y `TXT`. Todo nombre cuelga de `.test` y toda dirección es IPv4 de loopback; el cargador rechaza lo demás. Un null MX es el único MX de su dominio y tiene preferencia 0 [R-7505 §3].
+- El DNS de `mtasim` es autoritativo para `test.` por UDP y TCP: `NXDOMAIN` para nombres inexistentes y respuesta vacía para tipos ausentes, ambos con un SOA sintético; `REFUSED` fuera de `.test`. Los TXT de más de 255 octetos se parten en cadenas de 255.
 
 ## 4. Propiedades
 
@@ -250,6 +284,7 @@ Variantes por etiqueta de compilación (`go build -tags <nombre>`, binario en `b
 - `kill -9` del motor en instantes aleatorios sembrados.
 - Ventana entre 250 y registro durable (`post_250`): el simulador, por el socket de control, avisa al orquestador antes de enviar el 250 de un mensaje marcado; el orquestador detiene el motor con `SIGSTOP`, autoriza el 250, y lo mata con `SIGKILL`. El receptor aceptó y el motor no pudo registrarlo.
 - Corte de conexiones y cambio de perfil en caliente por el socket de control.
+- Protocolo del socket de control (diseño, k1-01): socket Unix de flujo; una línea JSON por petición y una línea JSON de respuesta, `{"ok": true, ...}` o `{"ok": false, "error": "..."}`. Comandos: `ping`; `switch_profile` con `host` y `profile` (o `from` y `profile` para todos los hosts de un perfil), que vale para las conexiones nuevas (las abiertas conservan su perfil; para forzarlo se combina con `cut`); `cut` con `host` o `src_ip` opcionales, que responde `cut` (número de conexiones cortadas); `hold_250` con `msg_id` opcional (vacío: el próximo mensaje aceptado); `release_250` con `msg_id` opcional, que responde `released`. Cuando un mensaje retenido termina DATA con 2xx, el simulador sincroniza su `data_end`, envía `{"ev": "held_250", "msg_id": ..., "conn": ...}` por la conexión de control que pidió la retención y no envía el 250 hasta `release_250`. Si esa conexión de control se cierra, sus retenciones se liberan; si la conexión SMTP se corta mientras espera, el 250 no se envía.
 - Latencia en `lo` con `tc qdisc ... netem` solo si un escenario la necesita (medido: funciona dentro del espacio de nombres).
 
 ## 5. Parámetros del proyecto

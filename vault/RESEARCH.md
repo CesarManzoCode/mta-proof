@@ -43,7 +43,7 @@ Las filas «vía investigación» se apoyan en los archivos de investigación de
 | --- | --- | --- | --- | --- |
 | S-GO | Go | 1.27.3 (`go version`) | instalado en la máquina | BSD-3 |
 | S-SQLITE | `modernc.org/sqlite` | v1.61.0 | go.sum `h1:sQi63oLQ9uquAUA4CzOisH35Q3pEszkPBuHM0tFL8CY=` | BSD-3 (SQLite: dominio público) |
-| S-DNS | `github.com/miekg/dns` | v1.1.73 | go.sum `h1:uhT8nJxmTrPJYClxVxTCX+CVn6qnzSiybRk72Z6DgrE=` | BSD-3. La v2 vive en codeberg.org/miekg/dns; se usa v1 |
+| S-DNS | `github.com/miekg/dns` | v1.1.73 | go.sum `h1:uhT8nJxmTrPJYClxVxTCX+CVn6qnzSiybRk72Z6DgrE=` | BSD-3. La v2 vive en codeberg.org/miekg/dns; se usa v1. Dependencia directa en `go.mod` desde k1-01 (hash y `LICENSE` verificados en la caché de módulos); arrastra `golang.org/x/net` v0.57.0 y `golang.org/x/sys` v0.47.0, BSD-3 (`LICENSE` de cada módulo) |
 | S-MSGAUTH | `github.com/emersion/go-msgauth` | v0.7.0 | go.sum `h1:vj2hMn6KhFtW41kshIBTXvp6KgYSqpA/ZN9Pv4g1INc=` | MIT. `dkim.Sign`, `dkim.VerifyWithOptions` con `LookupTXT` propio |
 | S-SPF | `blitiri.com.ar/go/spf` | v1.6.0 | go.sum `h1:TK91HOya1R2J5b+x+NZfdYTqDqbr+Q+hil5gy8WzLDQ=` | MIT. `CheckHostWithSender` con `WithResolver` |
 | S-HARAKA | Haraka | 3.3.5 | npm `sha512-nAO+V/N/YfTHg8Dul2gY3RTt0+ErnqkUAcvsEVDBr7I1yGOTAvjqG+6PT1RRY999a924gpEWJ/tPx+CahZLivw==`, gitHead `dc8d154d1b4ec96d6dfd22a67d87c22b48527651` | MIT. `outbound.ini`: `local_mx_ok`, `temp_fail_intervals` (unidades s/m/h/d, mínimo 5 s), `enable_tls`, `connect_timeout`; `notes.outbound_ip` vía hook `get_mx` |
