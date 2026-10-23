@@ -202,6 +202,35 @@ Lista de casos `{"id", "provider", "code", "enhanced", "text", "expected_class",
 
 Clases: `permanent`, `transient`, `undetermined`. Subtipos: los de Resend (`General`, `NoEmail`, `MailboxFull`, `MessageTooLarge`, `ContentRejected`, `AttachmentRejected`) [R-RESEND-BOUNCES] más los del proyecto: `RateLimited`, `Reputation`, `AuthConfig`, `TLSPolicy`, `NullMX`, `Connection`.
 
+Diseño (k1-03):
+
+- Campos del caso: `provider` es el nombre del perfil del destino (`gmail-model`, …) o vacío si la respuesta no es de un proveedor; `source` es exactamente un identificador de RESEARCH; un caso `undetermined` espera `expected_subtype` vacío.
+- El clasificador (`internal/classify`) recibe proveedor, código, código extendido y texto, y evalúa una tabla de reglas en tres niveles: (1) reglas de proveedor, que coinciden con el inicio literal de un texto de 3.2 o con su etiqueta (`[TSS04]`, `[IPTS04]`); (2) reglas por código extendido [R-3463 §3, R-7505 §4.1]; (3) la regla genérica de clase 4. Dentro de un nivel gana la primera en orden de tabla. Sin coincidencia, `undetermined` con `rule_id` `d14.undetermined` (D14). Toda decisión trae `rule_id`.
+- Un código extendido solo coincide si su clase es la del código de respuesta. En los textos con marcador (`domain-name`, `<domain>`) el marcador vale por un dominio sin espacios o por sí mismo, como lo imprime la fuente.
+- La tabla rechaza al cargar: reglas sin fuente, regla genérica que no sea la de clase 4 transitoria, y reglas permanentes que puedan coincidir con algo que no sea un 5xx.
+- El núcleo registra cada clasificación en un evento `classified` con la respuesta (`code`, `enhanced`, `text`), `class`, `subtype` y `rule_id`.
+
+| `rule_id` | Nivel | Condición | Clase / subtipo | Fuente |
+| --- | --- | --- | --- | --- |
+| `google.rate_ip` | proveedor | `421 4.7.28` + texto de 3.2 | `transient` / `RateLimited` | R-GOOGLE-ERR |
+| `google.try_later` | proveedor | `421 4.7.0` + texto de 3.2 | `transient` / `General` | R-GOOGLE-ERR |
+| `google.unauthenticated` | proveedor | `550 5.7.26` + texto de 3.2 | `permanent` / `AuthConfig` | R-GOOGLE-ERR |
+| `google.dmarc_policy` | proveedor | `550 5.7.26` + texto de 3.2 con `domain-name` | `permanent` / `AuthConfig` | R-GOOGLE-ERR |
+| `google.rcpt_rate` | proveedor | `450 4.2.1` + texto de 3.2 | `transient` / `RateLimited` | R-GOOGLE-ERR |
+| `google.no_account` | proveedor | `550 5.1.1` + texto de 3.2 | `permanent` / `NoEmail` | R-GOOGLE-ERR |
+| `yahoo.tss04` | proveedor | `421` + `[TSS04]` | `transient` / `General` | R-SUPED-YAHOO |
+| `yahoo.ipts04` | proveedor | `421` + `[IPTS04]` | `transient` / `Reputation` | R-SUPED-YAHOO |
+| `microsoft.auth_level` | proveedor | `550 5.7.515` + texto de 3.2 con `<domain>` | `permanent` / `AuthConfig` | R-MS-515 |
+| `microsoft.dmarc_reject` | proveedor | `550 5.7.509` + texto de 3.2 con `<domain>` | `permanent` / `AuthConfig` | R-MS-509 |
+| `rfc7505.null_mx` | extendido | `556 5.1.10` | `permanent` / `NullMX` | R-7505 §4.1 |
+| `rfc3463.bad_mailbox` | extendido | `5.1.1` («only useful for permanent failures») | `permanent` / `NoEmail` | R-3463 §3.2 |
+| `rfc3463.mailbox_full` | extendido | `4.2.2` o `5.2.2` («should be used as a persistent transient failure») | `transient` / `MailboxFull` | R-3463 §3.3 |
+| `rfc3463.mailbox_length` | extendido | `5.2.3` («should be used as a permanent failure») | `permanent` / `MessageTooLarge` | R-3463 §3.3 |
+| `rfc3463.too_big` | extendido | `5.3.4` («useful only as a permanent error») | `permanent` / `MessageTooLarge` | R-3463 §3.4 |
+| `rfc3463.class4` | genérica | cualquier 4xx | `transient` / `General` | R-3463 §2 |
+
+Los subtipos de las reglas de proveedor son diseño: las fuentes dan el texto, no una categoría. `MessageTooLarge` es permanente aquí aunque Resend lo agrupe con los transitorios [R-RESEND-BOUNCES], porque R-3463 §3.3–3.4 dice que 5.2.3 y 5.3.4 son permanentes y reenviar el mismo mensaje no cambia el resultado. `5.2.2` es transitorio aunque llegue con un 5xx, como pide R-3463 §3.3.
+
 ### 3.9 Zona de laboratorio (`lab/zone.json`)
 
 ```json

@@ -258,6 +258,44 @@ func TestAttemptTransitions(t *testing.T) {
 	}
 }
 
+func TestClassifiedEvent(t *testing.T) {
+	e := newSim(t)
+	a := e.ingest(sub("a"), "").MsgID
+	b := e.ingest(sub("b"), "").MsgID
+	if _, err := e.core.Classify(a, Route{}, 550, "5.1.1", "x"); err != ErrBadState {
+		t.Fatalf("classify without an attempt: %v", err)
+	}
+	route := Route{Provider: "outlook-model", MXHost: "mx1.outlook-model.test", SrcIP: "127.0.2.1"}
+	e.core.StartAttempt(a, route)
+	e.core.StartAttempt(b, route)
+	text := "Access denied, sending domain sender.test does not meet the required authentication level."
+	d, err := e.core.Classify(a, route, 550, "5.7.515", text)
+	if err != nil || d.Class != "permanent" || d.Subtype != "AuthConfig" || d.RuleID != "microsoft.auth_level" {
+		t.Fatalf("classify 550 5.7.515: %+v %v", d, err)
+	}
+	if d, _ := e.core.Classify(b, route, 554, "", "Transaction failed"); d.Class != "undetermined" || d.RuleID == "" {
+		t.Fatalf("classify 554 without rule: %+v", d)
+	}
+	e.commit()
+	e.reopen() // read back from the database
+	cl := e.events(KindClassified)
+	if len(cl) != 2 {
+		t.Fatalf("%d classified events, want 2", len(cl))
+	}
+	got := cl[0]
+	if got.MsgID != a || got.Attempt != 1 || got.Provider != route.Provider || got.MXHost != route.MXHost ||
+		got.SrcIP != route.SrcIP || got.Code != 550 || got.Enhanced != "5.7.515" || got.Text != text ||
+		got.Class != "permanent" || got.Subtype != "AuthConfig" || got.RuleID != "microsoft.auth_level" {
+		t.Fatalf("classified event: %+v", got)
+	}
+	if got := cl[1]; got.MsgID != b || got.Class != "undetermined" || got.Subtype != "" || got.RuleID != "d14.undetermined" {
+		t.Fatalf("undetermined classified event: %+v", got)
+	}
+	if _, err := e.core.Classify("m99999999", route, 421, "", ""); err != ErrNotFound {
+		t.Fatalf("unknown message: %v", err)
+	}
+}
+
 // msgIDRe is msg-id of RFC 5322 §3.6.4 with dot-atom-text on both sides.
 var msgIDRe = regexp.MustCompile(`^<[A-Za-z0-9!#$%&'*+/=?^_` + "`" + `{|}~-]+(\.[A-Za-z0-9!#$%&'*+/=?^_` + "`" + `{|}~-]+)*@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*>$`)
 

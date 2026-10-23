@@ -11,6 +11,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/CesarManzoCode/mta-proof/internal/classify"
 	"github.com/CesarManzoCode/mta-proof/internal/clock"
 	"github.com/CesarManzoCode/mta-proof/internal/store"
 )
@@ -209,6 +210,25 @@ func (c *Core) StartAttempt(id string, r Route) (int, error) {
 	return m.Attempts, nil
 }
 
+// Classify classifies the receiver's reply to the current attempt of an
+// inflight message with the rule table of contract 3.8, records a
+// classified event with the reply, class, subtype and rule_id, and returns
+// the decision. A reply without a rule is undetermined (D14).
+func (c *Core) Classify(id string, r Route, code int, enhanced, text string) (classify.Decision, error) {
+	m := c.msgs[id]
+	if m == nil {
+		return classify.Decision{}, ErrNotFound
+	}
+	if m.State != store.StateInflight {
+		return classify.Decision{}, ErrBadState
+	}
+	d := classify.Classify(classify.Reply{Provider: r.Provider, Code: code, Enhanced: enhanced, Text: text})
+	c.event(&store.Event{Kind: KindClassified, Provider: r.Provider, MXHost: r.MXHost, SrcIP: r.SrcIP,
+		Attempt: m.Attempts, Code: code, Enhanced: enhanced, Text: text,
+		Class: d.Class, Subtype: d.Subtype, RuleID: d.RuleID}, m)
+	return d, nil
+}
+
 // Outcome is the recorded result of an inflight attempt.
 type Outcome struct {
 	Kind     string // KindDelivered, KindDeferred, KindBounced or KindExpired
@@ -224,8 +244,8 @@ type Outcome struct {
 }
 
 // FinishAttempt records the result of the current attempt of an inflight
-// message. Response parsing, classification and backoff decide the Outcome
-// elsewhere; the core only applies it.
+// message. Response parsing and backoff decide the Outcome elsewhere, from
+// the decision of Classify; the core only applies it.
 func (c *Core) FinishAttempt(id string, o Outcome) error {
 	m := c.msgs[id]
 	if m == nil {
