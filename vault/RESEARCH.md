@@ -77,6 +77,8 @@ Arch Linux, kernel 7.2.10, 12 CPU, 14 GiB visibles, disco `/home` SSD.
 | Campaña real de k1-07 (semilla 1, `lab/campaign.json`) sin la reconstrucción de límites aprendidos, 2026-10-23, kernel 7.2.11 | 10 000 aceptados, 30 muertes (5 `post_250`), 0 perdidos; 7 violaciones de `yahoo.max_msgs_per_conn`, cada una entre 13 y 21 s después de un reinicio; la de t+311 s contó. Un duplicado con el 250 del receptor 1 ms después de la muerte del motor | 2.6, 4 |
 | Corrida de prueba de 2 000 mensajes a ritmo libre con 6 cortes | carga en 2,5 s (~800 ingresos/s con 8 clientes); 3 cortes cayeron durante el `fsync` del `data_end` y dejaron un mensaje aceptado sin 250 (duplicado tras `engine.no_reply`) | 3.12, 4 |
 | `make verify` de k1-07 (diez propiedades), 2026-10-23, kernel 7.2.11 | todas `pass`; 342,6 s en total, de ellos 333,4 s de la campaña real (carga a 30 mensajes/s y drenaje de 0,03 s); `memory.peak` del scope 332 771 328 bytes; rearranque más lento del motor 46 ms; 8 duplicados, todos con muerte en su ventana; una sola violación (no contada) en la corrida real | 4, 5, D17 |
+| `mtadst run` del escenario `warmup` (38 000 mensajes, semilla 1), 2026-10-23, kernel 7.2.11 | 10,1 s de reloj; 6,5 días virtuales; 35 945 entregados y 2 055 en cola (capacidad del plan en siete días: 35 950); ningún tope diario ni horario superado en el receptor, y el horario se alcanza exactamente (50, 75, 100 y 150) en los días del plan que lo tienen; diferencia máxima de reparto 0,00099 | 2.6, 4 |
+| `make verify` de k2-01 (once propiedades, con `ip_warmup`), 2026-10-23, kernel 7.2.11 | todas `pass`; 359,2 s en total; `memory.peak` del scope 729 477 120 bytes (332 771 328 en k1-07) | 4, D17 |
 
 ## Huecos que siguen abiertos
 

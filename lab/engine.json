@@ -6,7 +6,18 @@
   "postmaster": "postmaster@engine.mtaproof.test",
   "seed": 1,
   "max_batch": 256,
-  "src_ips": ["127.0.2.1"],
+  "warmup": {
+    "source": "R-RESEND-WARMUP",
+    "note": "Plan de dominio nuevo de R-RESEND-WARMUP: tope diario de los días 1 a 7 y tope horario de los días 4 a 7 (null: sin tope). Se aplica a toda IP de un pool que no sea warm ni traiga su propio plan.",
+    "plan": {
+      "daily": [150, 250, 400, 700, 1000, 1500, 2000],
+      "hourly": [null, null, null, 50, 75, 100, 150]
+    },
+    "origin_ms": 0
+  },
+  "pools": [
+    {"name": "shared", "tenants": ["*"], "ips": [{"ip": "127.0.2.1", "warm": true}]}
+  ],
   "route_ttl_s": 300,
   "idle_s": 5,
   "timeouts": {"connect_s": 10, "command_s": 30, "data_end_s": 60},

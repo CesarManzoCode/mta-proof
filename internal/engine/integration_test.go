@@ -126,7 +126,8 @@ func TestRealDeliveryAgainstSimulator(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.HTTP, cfg.DNS, cfg.SrcIPs = "127.0.0.1:0", dnsAddr, []string{"127.0.0.1"}
+	cfg.HTTP, cfg.DNS = "127.0.0.1:0", dnsAddr
+	cfg.Pools = []Pool{{Name: "shared", Tenants: []string{"*"}, IPs: []PoolIP{{IP: "127.0.0.1", Warm: true}}}}
 	cfg.SMTPPort = smtpAddr.(*net.TCPAddr).Port
 	cfg.Limits.Domain = map[string]Limit{"*": {Connections: 2, MsgsPerConn: 4}}
 	if err := cfg.Validate(); err != nil {

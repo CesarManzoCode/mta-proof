@@ -273,7 +273,7 @@ func mx(pref uint16, host string, addrs ...string) MXHost {
 // testConfig is a small valid configuration for the fake network.
 func testConfig() *Config {
 	cfg := &Config{DNS: "127.0.0.1:53", Hostname: "engine.mtaproof.test", Postmaster: "postmaster@engine.mtaproof.test",
-		SrcIPs: []string{"127.0.2.1"}, Retry: RetryPolicy{InitialS: 60, Factor: 2, MaxS: 600, LifetimeS: 3600},
+		Pools: []Pool{{Name: "shared", Tenants: []string{"*"}, IPs: []PoolIP{{IP: "127.0.2.1", Warm: true}}}}, Retry: RetryPolicy{InitialS: 60, Factor: 2, MaxS: 600, LifetimeS: 3600},
 		Providers: []Provider{{Name: "yahoo-model", MXSuffixes: []string{"yahoo-model.test"}}}}
 	if err := cfg.Validate(); err != nil {
 		panic(err)

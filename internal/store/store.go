@@ -342,6 +342,18 @@ type Snapshot struct {
 	// recorded a learned limit, in seq order: the core rebuilds its
 	// learned limits from them, so a restart does not forget them.
 	Learned []string
+	// Attempts are the attempt_started events and attempt results with a
+	// source address of the last two days of the log, in seq order: the
+	// core rebuilds the warm-up use of each address from them.
+	Attempts []AttemptEvent
+}
+
+// AttemptEvent is one attempt start or result of Snapshot.Attempts.
+type AttemptEvent struct {
+	MsgID string
+	Kind  string
+	SrcIP string
+	AtMs  int64
 }
 
 // Load reads the whole live state. Messages come back in msg_id sequence
@@ -412,6 +424,25 @@ func (s *Store) Load() (*Snapshot, error) {
 			return nil, err
 		}
 		snap.Learned = append(snap.Learned, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	rows, err = s.db.Query(`SELECT msg_id, kind, src_ip, at_ms FROM events
+		WHERE kind IN ('attempt_started', 'delivered', 'deferred', 'bounced', 'expired')
+		AND src_ip IS NOT NULL AND src_ip != ''
+		AND at_ms >= (SELECT COALESCE(MAX(at_ms), 0) FROM events) - 172800000 ORDER BY seq`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var a AttemptEvent
+		if err := rows.Scan(&a.MsgID, &a.Kind, &a.SrcIP, &a.AtMs); err != nil {
+			return nil, err
+		}
+		snap.Attempts = append(snap.Attempts, a)
 	}
 	return snap, rows.Err()
 }

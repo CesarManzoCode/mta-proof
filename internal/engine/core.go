@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"net/netip"
 	"sort"
 	"time"
 
@@ -85,6 +86,7 @@ func NewCore(snap *store.Snapshot, clk clock.Clock, rng *rand.Rand) *Core {
 	for _, d := range snap.Learned {
 		c.restoreLearned(d)
 	}
+	c.restoreUse(snap.Attempts)
 	c.recover(snap.Messages)
 	for _, m := range snap.Messages {
 		if m.State == store.StateQueued {
@@ -92,6 +94,24 @@ func NewCore(snap *store.Snapshot, clk clock.Clock, rng *rand.Rand) *Core {
 		}
 	}
 	return c
+}
+
+// restoreUse replays the attempt starts and results of the recent events,
+// in seq order, so a restart keeps the warm-up use of each source address.
+// Attempts still in flight are recovered as queued and charge nothing more.
+func (c *Core) restoreUse(attempts []store.AttemptEvent) {
+	for _, a := range attempts {
+		src, err := netip.ParseAddr(a.SrcIP)
+		if err != nil {
+			continue
+		}
+		if a.Kind == KindAttemptStarted {
+			c.chargeStart(a.MsgID, src, a.AtMs)
+		} else {
+			c.chargeEnd(a.MsgID, src, a.AtMs)
+		}
+	}
+	clear(c.s.inflight)
 }
 
 func (c *Core) nowMs() int64 { return clock.Ms(c.clk.Now()) }
@@ -285,6 +305,7 @@ func (c *Core) FinishAttempt(id string, o Outcome) error {
 	}
 	m.UpdatedAtMs = now
 	c.update(m)
+	c.chargeEnd(id, netip.Addr{}, now)
 	if m.State == store.StateQueued {
 		c.enqueue(m)
 	}

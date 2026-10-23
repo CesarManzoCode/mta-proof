@@ -202,7 +202,6 @@ type sched struct {
 	queues    map[queueKey]*queue
 	qkeys     []queueKey // sorted
 	rr        int
-	srcRR     int
 	routes    map[string]*route
 	resolving map[string]bool
 	conns     map[int64]*connState
@@ -211,12 +210,15 @@ type sched struct {
 	learned   map[string]*learnedLimits
 	blocked   map[queueKey][]string
 	supp      map[suppKey]*store.Suppression
+	use       map[netip.Addr]*ipUse
+	inflight  map[string]attemptStart
 }
 
 func newSched() *sched {
 	return &sched{queues: map[queueKey]*queue{}, routes: map[string]*route{}, resolving: map[string]bool{},
 		conns: map[int64]*connState{}, starts: map[string][]int64{}, learned: map[string]*learnedLimits{},
-		blocked: map[queueKey][]string{}, supp: map[suppKey]*store.Suppression{}}
+		blocked: map[queueKey][]string{}, supp: map[suppKey]*store.Suppression{},
+		use: map[netip.Addr]*ipUse{}, inflight: map[string]attemptStart{}}
 }
 
 // SetDelivery configures delivery. The MX shuffle draws from its own
@@ -487,6 +489,9 @@ func (c *Core) serve(q *queue, cs *connState, now int64) served {
 		return served{progress: true}
 	}
 	if cs != nil {
+		if w := c.capWait(cs.src, now); w > 0 {
+			return served{wake: w}
+		}
 		if w := c.rateWait(c.scopes(cs.q, cs.src, cs.provider), now); w > 0 {
 			return served{wake: w}
 		}
@@ -498,7 +503,11 @@ func (c *Core) serve(q *queue, cs *connState, now int64) served {
 		if idle.q != q.key || idle.state != connIdle || !c.usable(idle) {
 			continue
 		}
-		if w := c.rateWait(c.scopes(idle.q, idle.src, idle.provider), now); w > 0 {
+		w := c.capWait(idle.src, now)
+		if w == 0 {
+			w = c.rateWait(c.scopes(idle.q, idle.src, idle.provider), now)
+		}
+		if w > 0 {
 			if wake == 0 || w < wake {
 				wake = w
 			}
@@ -522,20 +531,33 @@ func (c *Core) serve(q *queue, cs *connState, now int64) served {
 	s.conns[nc.id] = nc
 	c.StartAttempt(m.ID, Route{Provider: rt.provider, SrcIP: src.String()})
 	c.recordStart(nc.keys, now)
+	c.chargeStart(m.ID, src, now)
 	return served{progress: true, acts: []Action{{Kind: ActOpen, Conn: nc.id,
 		Open: &OpenSpec{Src: src, Port: s.cfg.SMTPPort, MX: rt.mx}}}}
 }
 
-// pickSrc returns the first source address, round-robin, whose
-// connection limits and rates allow one more connection of queue k. When
-// none does, it records the connection limits that blocked k and returns
-// the earliest instant a rate frees up.
+// pickSrc chooses the source address of a new connection of queue k
+// among the addresses of the tenant's pool whose connection limits, rates
+// and warm-up caps allow one more attempt: the one with the largest
+// fraction of its plan capacity left, so the pool spreads its sends in
+// proportion to the plan; ties go round-robin. When none qualifies, it
+// records the connection limits that blocked k and returns the earliest
+// instant a rate or a cap frees up.
 func (c *Core) pickSrc(k queueKey, provider string, now int64) (netip.Addr, []scope, int64) {
-	ips := c.s.cfg.srcIPs
+	pool := c.s.cfg.poolOf(k.tenant)
+	ips := pool.ips
 	var blocked []string
 	var wake int64
+	addWake := func(w int64) {
+		if w > 0 && (wake == 0 || w < wake) {
+			wake = w
+		}
+	}
+	best, bestFree := -1, -1.0
+	var bestSc []scope
 	for i := range ips {
-		src := ips[(c.s.srcRR+i)%len(ips)]
+		j := (pool.rr + i) % len(ips)
+		src := ips[j].addr
 		sc := c.scopes(k, src, provider)
 		ok := true
 		for _, x := range sc {
@@ -547,19 +569,157 @@ func (c *Core) pickSrc(k queueKey, provider string, now int64) (netip.Addr, []sc
 		if !ok {
 			continue
 		}
-		if w := c.rateWait(sc, now); w > 0 {
-			if wake == 0 || w < wake {
-				wake = w
-			}
+		if w := c.capWait(src, now); w > 0 {
+			addWake(w)
 			continue
 		}
-		c.s.srcRR = (c.s.srcRR + i + 1) % len(ips)
-		return src, sc, 0
+		if w := c.rateWait(sc, now); w > 0 {
+			addWake(w)
+			continue
+		}
+		if free := c.capFree(ips[j], now); free > bestFree {
+			best, bestFree, bestSc = j, free, sc
+		}
+	}
+	if best >= 0 {
+		pool.rr = (best + 1) % len(ips)
+		return ips[best].addr, bestSc, 0
 	}
 	if len(blocked) > 0 {
 		c.s.blocked[k] = blocked
 	}
 	return netip.Addr{}, nil, wake
+}
+
+// ipUse counts the attempts charged to one source address in its current
+// day and hour of the clock.
+type ipUse struct {
+	day, hour   int64
+	dayN, hourN int
+}
+
+type attemptStart struct {
+	src netip.Addr
+	at  int64
+}
+
+func (c *Core) useOf(src netip.Addr) *ipUse {
+	u := c.s.use[src]
+	if u == nil {
+		u = &ipUse{day: -1 << 62, hour: -1 << 62}
+		c.s.use[src] = u
+	}
+	return u
+}
+
+func (u *ipUse) chargeDay(at int64) {
+	if d := floorDiv(at, dayMs); d > u.day {
+		u.day, u.dayN = d, 1
+	} else if d == u.day {
+		u.dayN++
+	}
+}
+
+func (u *ipUse) chargeHour(at int64) {
+	if h := floorDiv(at, hourMs); h > u.hour {
+		u.hour, u.hourN = h, 1
+	} else if h == u.hour {
+		u.hourN++
+	}
+}
+
+// chargeStart charges an attempt from src to the day and hour it starts.
+func (c *Core) chargeStart(id string, src netip.Addr, at int64) {
+	u := c.useOf(src)
+	u.chargeDay(at)
+	u.chargeHour(at)
+	c.s.inflight[id] = attemptStart{src: src, at: at}
+}
+
+// chargeEnd charges a finished attempt again to the day and hour it ends
+// in when they are not the ones it started in: the receiver counts the
+// DATA where it ends, so an attempt that crosses a boundary counts on
+// both sides. A result without a known start (a restart lost it) is
+// charged where it ends.
+func (c *Core) chargeEnd(id string, src netip.Addr, at int64) {
+	st, ok := c.s.inflight[id]
+	delete(c.s.inflight, id)
+	if ok {
+		src = st.src
+	}
+	if !src.IsValid() {
+		return
+	}
+	u := c.useOf(src)
+	if !ok || floorDiv(st.at, dayMs) != floorDiv(at, dayMs) {
+		u.chargeDay(at)
+	}
+	if !ok || floorDiv(st.at, hourMs) != floorDiv(at, hourMs) {
+		u.chargeHour(at)
+	}
+}
+
+// used returns the attempts of src that count against its caps at now:
+// those charged to the current day and hour, and those still in flight
+// that started before them, which will be charged where they end.
+func (c *Core) used(src netip.Addr, now int64) (int, int) {
+	d, h := floorDiv(now, dayMs), floorDiv(now, hourMs)
+	var dayN, hourN int
+	if u := c.s.use[src]; u != nil {
+		if u.day == d {
+			dayN = u.dayN
+		}
+		if u.hour == h {
+			hourN = u.hourN
+		}
+	}
+	for _, st := range c.s.inflight {
+		if st.src != src {
+			continue
+		}
+		if floorDiv(st.at, dayMs) < d {
+			dayN++
+		}
+		if floorDiv(st.at, hourMs) < h {
+			hourN++
+		}
+	}
+	return dayN, hourN
+}
+
+// capWait returns 0 when the warm-up caps of src allow one more attempt
+// at now, or else the start of the day or hour that frees it. An address
+// outside the pools has no caps.
+func (c *Core) capWait(src netip.Addr, now int64) int64 {
+	a := c.s.cfg.srcIPOf(src)
+	if a == nil {
+		return 0
+	}
+	daily, hourly := a.caps(c.s.cfg.Warmup.OriginMs, now)
+	dayN, hourN := c.used(src, now)
+	var w int64
+	if daily > 0 && dayN >= daily {
+		w = (floorDiv(now, dayMs) + 1) * dayMs
+	}
+	if hourly > 0 && hourN >= hourly {
+		w = max(w, (floorDiv(now, hourMs)+1)*hourMs)
+	}
+	return w
+}
+
+// capFree is the fraction of the caps of a left at now: the smaller of the
+// daily and hourly ones, 1 for an address without caps.
+func (c *Core) capFree(a *srcIP, now int64) float64 {
+	daily, hourly := a.caps(c.s.cfg.Warmup.OriginMs, now)
+	dayN, hourN := c.used(a.addr, now)
+	free := 1.0
+	if daily > 0 {
+		free = min(free, float64(daily-dayN)/float64(daily))
+	}
+	if hourly > 0 {
+		free = min(free, float64(hourly-hourN)/float64(hourly))
+	}
+	return free
 }
 
 // assign starts the attempt of m on the open connection cs.
@@ -569,6 +729,7 @@ func (c *Core) assign(cs *connState, m *store.Message, now int64) Action {
 	r := Route{Provider: cs.provider, MXHost: cs.mxHost, SrcIP: cs.src.String()}
 	c.StartAttempt(m.ID, r)
 	c.recordStart(cs.keys, now)
+	c.chargeStart(m.ID, cs.src, now)
 	c.event(&store.Event{Kind: KindRouted, Provider: r.Provider, MXHost: r.MXHost, SrcIP: r.SrcIP,
 		Attempt: m.Attempts, Detail: detail(map[string]any{"conn": cs.id, "reused": true})}, m)
 	return Action{Kind: ActSend, Conn: cs.id, Send: &SendSpec{MsgID: m.ID, From: m.From, To: m.To, Raw: m.Raw}}

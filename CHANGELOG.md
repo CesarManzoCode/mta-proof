@@ -1,5 +1,20 @@
 # Changelog
 
+## [K2] - sin cerrar
+
+### Añadido
+
+- Pools de IPs de origen en el motor (`pools` en la configuración, contrato 2.6): un pool por tenant y uno por defecto (`"*"`), con plan de calentamiento por IP (tope diario y horario por día del plan y día de inicio) o IPs `warm` sin topes. Plan por defecto: el de dominio nuevo de R-RESEND-WARMUP, citado en `warmup` de `lab/engine.json`.
+- Escenario simulado `warmup`: cuatro IPs en los días 1, 2, 3 y 5 del plan, una de ellas desconocida para `gmail-model` y `yahoo-model`, durante los siete días virtuales del plan.
+- Propiedad `ip_warmup`: topes diarios y horarios respetados por IP en el registro del receptor, más estrangulamiento (4xx) en las IPs desconocidas que en las conocidas y reparto diario conforme al plan dentro de `warmup_share_tolerance`.
+
+### Decisiones
+
+- `src_ips` de la configuración del motor se reemplaza por `pools` (contrato 2.6): una lista plana de IPs no puede llevar etapa de calentamiento ni separar tenants. `lab/engine.json` tiene un solo pool con la IP `warm` de K1, así la campaña real no cambia.
+- Un tope de calentamiento no difiere ni rebota: el mensaje espera en la cola sin avanzar su calendario de reintentos, porque un tope propio no es una respuesta del receptor.
+- La IP de origen se elige por la mayor fracción restante de su capacidad del plan, así el pool reparte en proporción a los topes. Medido en `warmup` (semilla 1): diferencia máxima de 0,00099 entre la fracción enviada por IP y la del plan en cada día.
+- Un intento cuya transacción cruza el cambio de hora o de día cuenta en los dos lados, y uno en vuelo cuenta ya en la hora nueva, porque el receptor anota el `data_end` donde termina. Lo cargado se reconstruye al arrancar desde el registro de eventos, como los límites aprendidos.
+
 ## [K1] - 2026-10-23
 
 ### Añadido

@@ -23,7 +23,8 @@ type Config struct {
 	Postmaster string      `json:"postmaster"`  // From of DSNs [R-3464 §2]
 	Seed       uint64      `json:"seed"`        // run seed for the core's random streams
 	MaxBatch   int         `json:"max_batch"`   // operations per group commit
-	SrcIPs     []string    `json:"src_ips"`     // source addresses, tried in order
+	Pools      []Pool      `json:"pools"`       // source address pools by tenant
+	Warmup     Warmup      `json:"warmup"`      // default warm-up plan of the pool addresses
 	RouteTTLS  int64       `json:"route_ttl_s"` // how long a resolved route is reused
 	IdleS      float64     `json:"idle_s"`      // idle connections are closed after this
 	Timeouts   Timeouts    `json:"timeouts"`
@@ -32,7 +33,9 @@ type Config struct {
 	Limits     Limits      `json:"limits"`
 	Adapt      Adapt       `json:"adapt"`
 
-	srcIPs []netip.Addr
+	pools      []*srcPool
+	tenantPool map[string]*srcPool
+	anyPool    *srcPool
 }
 
 // Timeouts bound the real transport's waits, in seconds.
@@ -75,6 +78,105 @@ func (p RetryPolicy) LifetimeMs() int64 { return int64(math.Round(p.LifetimeS * 
 type Provider struct {
 	Name       string   `json:"name"`
 	MXSuffixes []string `json:"mx_suffixes"`
+}
+
+// Pool is a set of source addresses (contract 2.3: 127.0.2.0/24 in the
+// lab). A tenant sends from the pool that lists it, or else from the pool
+// that lists "*".
+type Pool struct {
+	Name    string   `json:"name"`
+	Tenants []string `json:"tenants"`
+	IPs     []PoolIP `json:"ips"`
+}
+
+// PoolIP is one source address and its warm-up stage. A warm address has
+// no caps; any other follows Plan, or the warmup plan when Plan is absent,
+// from plan day StartDay (from 1) on day 0 of the run.
+type PoolIP struct {
+	IP       string      `json:"ip"`
+	Warm     bool        `json:"warm"`
+	StartDay int         `json:"start_day"`
+	Plan     *WarmupPlan `json:"plan"`
+}
+
+// WarmupPlan holds the caps of each plan day: Daily[i] and Hourly[i] are
+// the most attempts per day and per hour on plan day i+1; null is no cap.
+// After the last day the last value holds.
+type WarmupPlan struct {
+	Daily  []*int `json:"daily"`
+	Hourly []*int `json:"hourly"`
+}
+
+// Warmup is the default plan of the pool addresses. OriginMs is an instant
+// of day 0 of the run: run day d is the d-th UTC day after the one that
+// holds it (0 in mtadst, whose clock starts at 0).
+type Warmup struct {
+	Source   string      `json:"source"`
+	Note     string      `json:"note"`
+	Plan     *WarmupPlan `json:"plan"`
+	OriginMs int64       `json:"origin_ms"`
+}
+
+func capsOf(v ...int) []*int {
+	out := make([]*int, len(v))
+	for i, n := range v {
+		if n > 0 {
+			out[i] = &n
+		}
+	}
+	return out
+}
+
+// DefaultWarmupPlan is the plan for a new domain of R-RESEND-WARMUP: up to
+// 150, 250, 400, 700, 1 000, 1 500 and 2 000 emails on days 1–7, and at
+// most 50, 75, 100 and 150 per hour on days 4–7 (no hourly cap before).
+var DefaultWarmupPlan = WarmupPlan{
+	Daily:  capsOf(150, 250, 400, 700, 1000, 1500, 2000),
+	Hourly: capsOf(0, 0, 0, 50, 75, 100, 150),
+}
+
+// srcPool and srcIP are the validated pools.
+type srcPool struct {
+	name string
+	ips  []*srcIP
+	rr   int
+}
+
+type srcIP struct {
+	addr     netip.Addr
+	daily    []*int // nil for a warm address
+	hourly   []*int
+	startDay int
+}
+
+// caps returns the daily and hourly caps of a at instant ms (0: no cap).
+func (a *srcIP) caps(originMs, ms int64) (int, int) {
+	i := int64(a.startDay-1) + floorDiv(ms, dayMs) - floorDiv(originMs, dayMs)
+	return capAt(a.daily, i), capAt(a.hourly, i)
+}
+
+func capAt(caps []*int, i int64) int {
+	if len(caps) == 0 {
+		return 0
+	}
+	i = max(0, min(i, int64(len(caps)-1)))
+	if caps[i] == nil {
+		return 0
+	}
+	return *caps[i]
+}
+
+const (
+	hourMs = 3_600_000
+	dayMs  = 24 * hourMs
+)
+
+func floorDiv(a, b int64) int64 {
+	q := a / b
+	if a%b != 0 && a < 0 {
+		q--
+	}
+	return q
 }
 
 // Limit is one set of limits; zero means no limit.
@@ -174,16 +276,8 @@ func (c *Config) Validate() error {
 	if c.MaxBatch == 0 {
 		c.MaxBatch = 256
 	}
-	if len(c.SrcIPs) == 0 {
-		return errors.New("src_ips: at least one source address")
-	}
-	c.srcIPs = nil
-	for _, s := range c.SrcIPs {
-		a, err := netip.ParseAddr(s)
-		if err != nil || !a.Is4() {
-			return fmt.Errorf("src_ips: %q is not an IPv4 address", s)
-		}
-		c.srcIPs = append(c.srcIPs, a)
+	if err := c.validatePools(); err != nil {
+		return err
 	}
 	if c.RouteTTLS == 0 {
 		c.RouteTTLS = 300
@@ -240,6 +334,117 @@ func (c *Config) Validate() error {
 	}
 	if c.Adapt.RateWindowS < 0 {
 		return errors.New("adapt.rate_window_s must be positive")
+	}
+	return nil
+}
+
+func (c *Config) validatePools() error {
+	if c.Warmup.Plan == nil {
+		p := DefaultWarmupPlan
+		c.Warmup.Plan = &p
+		if c.Warmup.Source == "" {
+			c.Warmup.Source = "R-RESEND-WARMUP"
+		}
+	}
+	if err := checkPlan("warmup.plan", c.Warmup.Plan); err != nil {
+		return err
+	}
+	if len(c.Pools) == 0 {
+		return errors.New("pools: at least one pool of source addresses")
+	}
+	c.pools, c.tenantPool, c.anyPool = nil, map[string]*srcPool{}, nil
+	names, addrs := map[string]bool{}, map[netip.Addr]bool{}
+	for _, p := range c.Pools {
+		if p.Name == "" || names[p.Name] {
+			return fmt.Errorf("pools: %q needs a unique name", p.Name)
+		}
+		names[p.Name] = true
+		if len(p.Tenants) == 0 || len(p.IPs) == 0 {
+			return fmt.Errorf("pools.%s: needs tenants and ips", p.Name)
+		}
+		sp := &srcPool{name: p.Name}
+		for _, t := range p.Tenants {
+			if t == "*" {
+				if c.anyPool != nil {
+					return fmt.Errorf("pools.%s: only one pool takes \"*\"", p.Name)
+				}
+				c.anyPool = sp
+				continue
+			}
+			if c.tenantPool[t] != nil {
+				return fmt.Errorf("pools.%s: tenant %q is in two pools", p.Name, t)
+			}
+			c.tenantPool[t] = sp
+		}
+		for _, ip := range p.IPs {
+			a, err := netip.ParseAddr(ip.IP)
+			if err != nil || !a.Is4() {
+				return fmt.Errorf("pools.%s: %q is not an IPv4 address", p.Name, ip.IP)
+			}
+			if addrs[a] {
+				return fmt.Errorf("pools.%s: %s is in more than one pool", p.Name, a)
+			}
+			addrs[a] = true
+			x := &srcIP{addr: a, startDay: 1}
+			switch {
+			case ip.Warm && (ip.Plan != nil || ip.StartDay != 0):
+				return fmt.Errorf("pools.%s: %s a warm address takes no plan or start_day", p.Name, a)
+			case !ip.Warm:
+				if ip.StartDay < 0 {
+					return fmt.Errorf("pools.%s: %s: start_day counts from 1", p.Name, a)
+				}
+				if ip.StartDay > 0 {
+					x.startDay = ip.StartDay
+				}
+				plan := c.Warmup.Plan
+				if ip.Plan != nil {
+					if err := checkPlan("pools."+p.Name+"."+a.String()+".plan", ip.Plan); err != nil {
+						return err
+					}
+					plan = ip.Plan
+				}
+				x.daily, x.hourly = plan.Daily, plan.Hourly
+			}
+			sp.ips = append(sp.ips, x)
+		}
+		c.pools = append(c.pools, sp)
+	}
+	if c.anyPool == nil {
+		return errors.New(`pools: one pool must take every other tenant ("*")`)
+	}
+	return nil
+}
+
+func checkPlan(where string, p *WarmupPlan) error {
+	if len(p.Daily) == 0 && len(p.Hourly) == 0 {
+		return fmt.Errorf("%s: daily or hourly caps are required", where)
+	}
+	for _, list := range [][]*int{p.Daily, p.Hourly} {
+		for _, v := range list {
+			if v != nil && *v < 1 {
+				return fmt.Errorf("%s: a cap is null or at least 1", where)
+			}
+		}
+	}
+	return nil
+}
+
+// poolOf returns the source pool of a tenant.
+func (c *Config) poolOf(tenant string) *srcPool {
+	if p := c.tenantPool[tenant]; p != nil {
+		return p
+	}
+	return c.anyPool
+}
+
+// srcIPOf returns the pool address a, or nil.
+func (c *Config) srcIPOf(a netip.Addr) *srcIP {
+	for _, p := range c.pools {
+		for _, x := range p.ips {
+			if x.addr == a {
+				return x
+			}
+		}
 	}
 	return nil
 }
