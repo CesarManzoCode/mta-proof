@@ -39,7 +39,7 @@ func newAPI(t *testing.T) *apiEnv {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { r.Run(ctx); close(done) }()
-	srv := httptest.NewServer(NewAPI(r))
+	srv := httptest.NewServer(NewAPI(r, nil))
 	reader, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
 	if err != nil {
 		t.Fatal(err)

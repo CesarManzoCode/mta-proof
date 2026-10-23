@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -93,5 +94,46 @@ func TestApplyIsAtomic(t *testing.T) {
 	}
 	if nulls != 1 {
 		t.Fatal("zero-valued event fields are not stored as NULL")
+	}
+}
+
+// TestMigrateAddsRetries opens a database created with the k1-02 schema,
+// without the retries column and the suppressions table, and checks that
+// its messages survive and gain both.
+func TestMigrateAddsRetries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "engine.db")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE messages (n INTEGER PRIMARY KEY, msg_id TEXT NOT NULL UNIQUE,
+		tenant TEXT NOT NULL, mail_from TEXT NOT NULL, rcpt TEXT NOT NULL, domain TEXT NOT NULL,
+		msg_type TEXT NOT NULL, payload_sha256 TEXT NOT NULL, raw BLOB NOT NULL, state TEXT NOT NULL,
+		attempts INTEGER NOT NULL, next_at_ms INTEGER NOT NULL, accepted_at_ms INTEGER NOT NULL,
+		updated_at_ms INTEGER NOT NULL);
+		INSERT INTO messages VALUES (1, 'm00000001', 't', 'a@b.test', 'c@d.test', 'd.test', 'transactional',
+		'x', X'00', 'queued', 2, 5, 1, 1);`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	m := &Message{ID: "m00000001", State: StateQueued, Attempts: 2, Retries: 3, NextAtMs: 9, UpdatedAtMs: 9}
+	sp := &Suppression{Tenant: "t", Address: "c@d.test", MsgID: "m00000001", Subtype: "NoEmail", CreatedAtMs: 9}
+	if err := s.Apply([]Write{{UpdateMessage: m}, {PutSuppression: sp}, {PutSuppression: sp}}); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := s.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := snap.Messages[0]; got.Retries != 3 || got.Attempts != 2 || got.To != "c@d.test" {
+		t.Fatalf("migrated message: %+v", got)
+	}
+	if len(snap.Suppressions) != 1 || !reflect.DeepEqual(snap.Suppressions[0], sp) {
+		t.Fatalf("suppressions: %+v", snap.Suppressions)
 	}
 }

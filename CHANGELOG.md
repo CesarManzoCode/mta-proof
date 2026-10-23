@@ -11,6 +11,9 @@
 - Clasificador de respuestas (`internal/classify`): tabla de reglas con id, fuente, nivel (proveedor, código extendido, clase 4) y resultado; el núcleo registra `class`, `subtype` y `rule_id` en el evento `classified`.
 - Corpus `corpus/classification.json` con las doce filas de 3.2, sus variantes con el dominio sustituido, códigos extendidos de RFC 3463 y casos sin regla.
 - `mtaengine serve` con la API de ingreso `POST /v1/messages`: un destinatario por mensaje, `Idempotency-Key` con ventana de 24 h, 202 solo tras el commit y mensaje RFC 5322 con `Message-ID` y `X-Mtaproof-Id` derivados del `msg_id`.
+- Entrega del motor y `mtaengine run --config lab/engine.json --db <engine.db>`: resolución MX contra el DNS configurado (MX implícito, null MX sin conexión, NXDOMAIN permanente, error temporal diferido), cliente SMTP detrás de una interfaz de transporte (TCP con IP de origen elegida), paso al siguiente MX ante falla de conexión, programador con una cola por (tenant, dominio) y turnos rotativos, límites de conexiones, mensajes por conexión y tasa por dominio, proveedor e IP, tenant e IP de origen, límites aprendidos ante throttling y ante el cierre silencioso de Yahoo, reintentos con calendario no decreciente y vida máxima, DSN `multipart/report` con reverse-path nulo al expirar y supresión por `NoEmail`.
+- Ejecutor real (`Deliverer`) y ejecutor de un hilo con reloj virtual (`Stepper`); en ambos el intento se confirma antes de tocar la red y su resultado antes de la siguiente acción sobre el mensaje.
+- Almacén: columna `messages.retries` (con migración de bases anteriores) y tabla `suppressions`.
 
 ### Decisiones
 
@@ -24,3 +27,7 @@
 - El motor guarda el mensaje RFC 5322 construido al ingresar y envía los mismos bytes en cada intento, así un duplicado tiene el mismo `sha256` en el receptor.
 - Reglas y subtipos del clasificador fijados en el contrato (3.8). `MessageTooLarge` es permanente (RFC 3463 §3.3–3.4) aunque Resend lo agrupe con los transitorios; `5.2.2` (buzón lleno) es transitorio aunque llegue con 5xx. Una regla permanente solo puede coincidir con un 5xx.
 - Un perfil solo puede usar respuestas idénticas a la tabla 3.2 y debe declarar en `sources` la fuente de cada una, para que una respuesta de fuente secundaria no quede escondida tras una regla con fuente primaria.
+- Diseño de la entrega fijado en el contrato (2.6). La cola es por (tenant, dominio) para que el control por tenant de K2 pause colas sin tocar las de otros. Los límites de proveedor cuentan por par proveedor e IP de origen, porque los proveedores limitan por IP emisora. Ante throttling la tasa aprendida es la mitad de lo iniciado en la última ventana y las conexiones bajan en una (supuesto); ante el cierre silencioso de Yahoo se aprende el número de transacciones que llevó la conexión y el mensaje vuelve a la cola sin avanzar el calendario, porque Yahoo permite reconectar enseguida.
+- Un mensaje expira en el diferimiento cuyo siguiente intento caería después de su vida, no después: ningún intento ocurre pasada la vida y los intervalos programados no decrecen.
+- Solo la expiración genera DSN; un rebote permanente queda en los eventos. La supresión es por tenant, como la lista de supresión de Resend por cuenta.
+- Las decisiones sin respuesta del receptor (NXDOMAIN, MX inutilizable, error temporal de DNS, MX inalcanzable, cierre silencioso, pérdida de conexión) llevan su propio `rule_id`, fuera de la tabla de respuestas del clasificador.

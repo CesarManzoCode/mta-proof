@@ -53,6 +53,7 @@ Toda corrida real ocurre dentro de un espacio de nombres de usuario, red y monta
 - `mtasim` abre un socket de control Unix por corrida para: cambiar de perfil en caliente, cortar conexiones y retener la respuesta 250 de un mensaje (ver 4.4).
 - `mtasim serve --out <dir> [--dns 127.0.0.1:53] [--smtp-port 25] [--profiles profiles] [--zone lab/zone.json] [--control <dir>/control.sock]`: cada host de cada perfil escucha en sus direcciones A de la zona (3.9) y en el puerto indicado; imprime `ready` en la salida estándar cuando todo escucha. Fuera del espacio de nombres se prueba con puertos altos, porque Linux enruta todo `127.0.0.0/8` por `lo`.
 - `mtaengine serve --db <engine.db> [--http 127.0.0.1:8025] [--seed 1] [--max-batch 256]` (diseño, k1-02): recupera el almacén, confirma los eventos `recovered`, abre la API de ingreso (3.10) e imprime `ready` cuando escucha.
+- `mtaengine run --config <engine.json> --db <engine.db>` (diseño, k1-04): lo mismo que `serve` más la entrega (2.6), con la configuración del archivo; la del laboratorio es `lab/engine.json`.
 
 ### 2.4 Almacén
 
@@ -74,6 +75,39 @@ Diseño (k1-02):
 | `make verify` | El comando único de verificación del README. Corre `make build`, entra en un scope de systemd de usuario y en el espacio de nombres, ejecuta todas las propiedades y escribe `out/report.json`. Sale con 0 solo si todas pasan; si no, imprime cuáles fallaron | No |
 
 `make check` no requiere espacios de nombres ni red: las pruebas de integración viven en `make verify`.
+
+### 2.6 Entrega (diseño, k1-04)
+
+**Configuración** (`lab/engine.json`; el cargador rechaza campos desconocidos): `http`, `dns` (dirección `ip:puerto` a la que el motor consulta; nunca lee `resolv.conf`), `smtp_port`, `hostname` (EHLO y `Reporting-MTA`), `postmaster` (`From` de los DSN), `seed`, `max_batch`, `src_ips` (IPs de origen, en orden), `route_ttl_s` (300, como la zona), `idle_s` (cierre de conexiones ociosas), `timeouts` (`connect_s`, `command_s`, `data_end_s`; supuesto), `retry_policy` (sección 5), `providers` (`name` y `mx_suffixes`), `limits` y `adapt.rate_window_s`.
+
+**Resolución** [R-5321 §5.1, R-7505]: consulta MX por UDP (TCP si la respuesta viene truncada) a la dirección configurada. `NXDOMAIN` → `bounced` permanente sin intento (`rfc5321.nxdomain`); cualquier otra falla del DNS → `deferred` sin intento con el calendario de reintentos (`rfc5321.dns_temporary`); sin registros MX → MX implícito (el dominio, preferencia 0); un único MX `.` de preferencia 0 → null MX: eventos `routed` (`null_mx`), `classified` con `556 5.1.10` (regla `rfc7505.null_mx`) y `bounced` `NullMX`, sin conexión ni reintento; MX presentes sin ningún host con dirección A → `bounced` permanente (`rfc5321.mx_unusable`). El núcleo ordena por preferencia y baraja los de igual preferencia con el flujo `engine.mx` de la semilla, después de ordenarlos por nombre, para que el orden no dependa del orden de la respuesta DNS. No se siguen CNAME. La ruta se reusa `route_ttl_s`; el proveedor es el del primer `mx_suffixes` que coincide con el MX más preferido.
+
+**Transporte y conversación**: interfaz `Transport` (`Dial` desde una IP de origen) y `Conn` a nivel de respuestas; el ejecutor real usa TCP con la IP de origen enlazada. Al abrir prueba los MX en orden y las direcciones de cada uno en orden, y pasa al siguiente ante falla de conexión sin respuesta. Un saludo o un HELO rechazado con respuesta termina el intento con esa respuesta (el receptor contestó; se clasifica). Si ninguna dirección sirve, `deferred` contado (`rfc5321.mx_unreachable`). Transacción: `MAIL FROM`, `RCPT TO` (un destinatario, D13), `DATA`; tras un rechazo a `MAIL`, `RCPT` o `DATA` se envía `RSET` y la conexión sigue; un 421 la cierra.
+
+**Programador**: una cola por destino, clave (tenant, dominio), ordenada por (`next_at_ms`, secuencia). `Dispatch` recorre las colas por turnos rotativos, un mensaje por cola por vuelta, hasta que ninguna avanza; una cola bloqueada por sus límites, su ruta o su calendario no frena a las demás. Una conexión pertenece a una cola y, al terminar una transacción, toma el siguiente mensaje de su cola; se cierra al llegar a su límite de mensajes, tras `idle_s` ociosa o, para no acaparar, si otra cola no pudo abrir por un límite de conexiones que esta conexión ocupa.
+
+**Límites** (0 o ausente = sin límite; `"*"` es el valor por defecto de cada ámbito): `connections` (conexiones abiertas), `msgs_per_conn` (transacciones por conexión) y `rate` (`limit` intentos iniciados por ventana deslizante de `per_s` segundos). Ámbitos: `domain` (todo lo que va al dominio), `provider` (por par proveedor e IP de origen, porque los proveedores limitan por IP emisora), `tenant` e `src_ip`. Se elige la primera IP de origen, por turnos, que admite una conexión más en los cuatro ámbitos.
+
+**Adaptación** (los factores son supuesto): los límites aprendidos viven por par proveedor e IP de origen (o dominio e IP si no hay proveedor) y solo bajan. (1) Respuesta de throttling de 3.2 (regla de proveedor con resultado transitorio): tasa aprendida = la mitad de los intentos iniciados en la última ventana `adapt.rate_window_s` (mínimo 1) y conexiones aprendidas = abiertas − 1 (mínimo 1); la conexión se cierra. (2) Cierre sin respuesta al `MAIL` de una conexión que ya llevó `n` ≥ 1 transacciones [R-YAHOO]: `msgs_per_conn` aprendido = `n`; el mensaje vuelve a la cola al instante sin avanzar el calendario (`yahoo.silent_close`), porque R-YAHOO permite reconectar enseguida. Lo aprendido va en `detail.learned` del evento `deferred` (`key` y los valores nuevos). Otra pérdida de conexión sin respuesta es `deferred` contado (`engine.no_reply`).
+
+**Reintentos y expiración** (sección 5): el k-ésimo diferimiento contado espera `min(initial_s · factor^(k−1), max_s)`; `messages.retries` guarda k. Si el siguiente intento caería después de `aceptado + lifetime_s`, el mensaje expira en ese momento (evento `expired` con la última respuesta); un mensaje que llega a su turno con la vida agotada expira sin intento (`detail.reason` `lifetime`). Así ningún intento ocurre pasada la vida y los intervalos programados no decrecen.
+
+**DSN** [R-3464 §2, R-5321 §4.5.5]: al expirar, el motor crea un mensaje nuevo (su propio `msg_id`, evento `accepted` con `detail.dsn_for`) con reverse-path nulo dirigido al reverse-path original, y registra `dsn_enqueued` en el original con `detail.dsn_msg_id`. Es `multipart/report; report-type=delivery-status` con una parte de texto y una `message/delivery-status` en 7bit: `Original-Envelope-Id` (el `msg_id`, que el motor entregó al remitente al ingresar, §2.2.1), `Reporting-MTA`, `Arrival-Date`; `Final-Recipient`, `Action: failed`, `Status` (el código extendido de la última respuesta, o `4.4.7` si no hay [R-3463 §3.5]), `Remote-MTA` y `Diagnostic-Code` si hubo respuesta, y `Last-Attempt-Date` si el último intento terminó al expirar. No devuelve el mensaje original. Un mensaje con reverse-path nulo nunca genera DSN. Los rebotes permanentes no generan DSN: quedan en los eventos.
+
+**Supresión**: un `bounced` con subtipo `NoEmail` suprime el par (tenant, dirección) (parte local tal cual, dominio en minúsculas) en la tabla `suppressions`; un mensaje posterior a esa dirección del mismo tenant termina `suppressed` al llegar su turno, sin intento, con `detail.suppressed_by`.
+
+**Durabilidad y orden**: el núcleo inicia el intento (`attempt_started`) dentro de la misma operación que decide enviarlo, y el ejecutor no toca la red hasta que esa operación está confirmada; el resultado de la transacción (`delivered`, `deferred`, `bounced`, `expired`) se confirma antes de que la conexión o el programador hagan otra cosa con ese mensaje. Un 250 recibido y no confirmado deja el mensaje `inflight`: la recuperación lo reencola y el reenvío es el duplicado acotado de 4. Ejecutores: `Deliverer` (real: una goroutine por conexión y por resolución, todo a través del `Runner` de 2.4) y `Stepper` (un hilo, reloj virtual, una acción a la vez en orden FIFO y commit tras cada paso; lo usa k1-05).
+
+**Eventos de un intento**: `attempt_started` (en conexión nueva sin `mx_host`), `routed` (`mx_host` y `detail`: `conn`, y `mx` en orden, `addr` y `tried` con las direcciones fallidas en conexión nueva, o `reused` en conexión reusada), `classified` si hubo rechazo, y el resultado. `detail` del resultado: `conn` y `stage` (`connect`, `ehlo`, `mail`, `rcpt`, `data`, `data_end`), `error` si no hubo respuesta, `learned`, `suppressed`.
+
+| `rule_id` sin respuesta del receptor | Clase / subtipo | Fuente |
+| --- | --- | --- |
+| `rfc5321.nxdomain` | `permanent` / `General` | R-5321 §5.1 |
+| `rfc5321.mx_unusable` | `permanent` / `General` | R-5321 §5.1 |
+| `rfc5321.dns_temporary` | `transient` / `Connection` | R-5321 §5.1 |
+| `rfc5321.mx_unreachable` | `transient` / `Connection` | R-5321 §5.1 |
+| `yahoo.silent_close` | `transient` / `Connection` (no avanza el calendario) | R-YAHOO |
+| `engine.no_reply` | `transient` / `Connection` | supuesto |
 
 ## 3. Formatos
 
@@ -152,6 +186,8 @@ Parámetros por tipo (diseño, k1-01). Los límites cuentan solo comandos acepta
 `kind` ∈ `accepted`, `idempotent_replay`, `idempotency_conflict`, `routed`, `attempt_started`, `response`, `classified`, `deferred`, `delivered`, `bounced`, `expired`, `suppressed`, `dsn_enqueued`, `tenant_paused`, `tenant_resumed`, `tls_negotiated`, `recovered`.
 
 Estados terminales: `delivered`, `bounced`, `expired`, `suppressed`. Cada mensaje aceptado tiene un único evento `accepted`.
+
+`detail` de los eventos de entrega (diseño, k1-04): ver 2.6.
 
 `detail` de los eventos de ingreso (diseño, k1-02): `accepted` lleva `payload_sha256` e `idempotency_key` si hubo clave; `idempotent_replay` e `idempotency_conflict` llevan `idempotency_key` y el `payload_sha256` de la petición, y su `msg_id` es el del mensaje que creó la clave; `recovered` lleva `from_state`. Las claves de `detail` van ordenadas.
 
@@ -342,7 +378,7 @@ Valores iniciales en `lab/params.json`. Un sprint puede endurecerlos (corridas m
 | --- | --- | --- | --- |
 | `campaign_messages` | 10 000 | 10 000 | idea |
 | `campaign_kills`, `campaign_kills_post_250` | 30 y 5 | 25 en total | idea |
-| `retry_policy` (`initial_s`, `factor`, `max_s`, `lifetime_s`) | 1 800, 2, 10 800, 432 000: primer reintento a 30 min, máximo 3 h, vida 5 días | — | R-5321 §4.5.4.1 (≥ 30 min, dos intentos en la primera hora, luego cada 2–3 h, abandono a 4–5 días) |
+| `retry_policy` (`initial_s`, `factor`, `max_s`, `lifetime_s`) | 1 800, 2, 10 800, 432 000: primer reintento a 30 min, máximo 3 h, vida 5 días. El motor lo lee de su configuración (`lab/engine.json`, 2.6), que trae estos valores | — | R-5321 §4.5.4.1 (≥ 30 min, dos intentos en la primera hora, luego cada 2–3 h, abandono a 4–5 días) |
 | `campaign_retry_policy` | 1, 2, 8, 600 | — | supuesto: solo para que la corrida real drene; los parámetros deben ser configurables (R-5321 §4.5.4.1) |
 | `isolation_margin` | 1.10 (p50 y p99 ≤ 1.10 × base) | — | supuesto |
 | `tenant_bounce_threshold`, `tenant_window`, `tenant_pause_bound_s` | 0.04, 200 resultados, 60 s virtuales | — | 4 %: R-RESEND-WARMUP; ventana y plazo: supuesto |

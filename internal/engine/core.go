@@ -61,6 +61,7 @@ type Core struct {
 	keys   map[string]*store.Key
 	lastN  int64
 	writes []store.Write
+	s      *sched
 }
 
 // NewCore rebuilds the core from a snapshot and runs start-up recovery:
@@ -68,7 +69,7 @@ type Core struct {
 // the queue with a recovered event. Call TakeWrites and commit them before
 // serving requests.
 func NewCore(snap *store.Snapshot, clk clock.Clock, rng *rand.Rand) *Core {
-	c := &Core{clk: clk, rng: rng, msgs: map[string]*store.Message{}, keys: map[string]*store.Key{}}
+	c := &Core{clk: clk, rng: rng, msgs: map[string]*store.Message{}, keys: map[string]*store.Key{}, s: newSched()}
 	for _, m := range snap.Messages {
 		c.msgs[m.ID] = m
 		if m.N > c.lastN {
@@ -78,11 +79,22 @@ func NewCore(snap *store.Snapshot, clk clock.Clock, rng *rand.Rand) *Core {
 	for _, k := range snap.Keys {
 		c.keys[k.Key] = k
 	}
+	for _, p := range snap.Suppressions {
+		c.s.supp[suppKey{p.Tenant, p.Address}] = p
+	}
 	c.recover(snap.Messages)
+	for _, m := range snap.Messages {
+		if m.State == store.StateQueued {
+			c.enqueue(m)
+		}
+	}
 	return c
 }
 
 func (c *Core) nowMs() int64 { return clock.Ms(c.clk.Now()) }
+
+// msgIDFor is the msg_id of sequence number n (D15).
+func msgIDFor(n int64) string { return fmt.Sprintf("m%08d", n) }
 
 func (c *Core) recover(ordered []*store.Message) {
 	now := c.nowMs()
@@ -138,13 +150,14 @@ func (c *Core) Ingest(s *Submission, key string) IngestResult {
 		}
 	}
 	c.lastN++
-	id := fmt.Sprintf("m%08d", c.lastN)
+	id := msgIDFor(c.lastN)
 	m := &store.Message{
 		N: c.lastN, ID: id, Tenant: s.Tenant, From: s.From, To: s.To, Domain: domainOf(s.To),
 		MsgType: s.MsgType, PayloadSHA256: sum, Raw: BuildMessage(id, s, c.clk.Now()),
 		State: store.StateQueued, NextAtMs: now, AcceptedAtMs: now, UpdatedAtMs: now,
 	}
 	c.msgs[id] = m
+	c.enqueue(m)
 	ins := *m
 	c.writes = append(c.writes, store.Write{InsertMessage: &ins})
 	d := map[string]any{"payload_sha256": sum}
@@ -269,6 +282,9 @@ func (c *Core) FinishAttempt(id string, o Outcome) error {
 	}
 	m.UpdatedAtMs = now
 	c.update(m)
+	if m.State == store.StateQueued {
+		c.enqueue(m)
+	}
 	c.event(&store.Event{Kind: o.Kind, Provider: o.Route.Provider, MXHost: o.Route.MXHost,
 		SrcIP: o.Route.SrcIP, Attempt: m.Attempts, Code: o.Code, Enhanced: o.Enhanced, Text: o.Text,
 		Class: o.Class, Subtype: o.Subtype, RuleID: o.RuleID, Detail: detail(o.Detail)}, m)

@@ -12,8 +12,9 @@ import (
 // it.
 const maxBody = 1 << 20
 
-// NewAPI returns the ingest HTTP handler: POST /v1/messages.
-func NewAPI(r *Runner) http.Handler {
+// NewAPI returns the ingest HTTP handler: POST /v1/messages. onAccept,
+// when not nil, is called after each committed new message.
+func NewAPI(r *Runner, onAccept func()) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/messages", func(w http.ResponseWriter, req *http.Request) {
 		key, err := idempotencyKey(req.Header)
@@ -48,6 +49,8 @@ func NewAPI(r *Runner) http.Handler {
 		}
 		if res.Replay {
 			w.Header().Set("Idempotent-Replayed", "true")
+		} else if onAccept != nil {
+			onAccept()
 		}
 		writeJSON(w, http.StatusAccepted, map[string]string{"id": res.MsgID})
 	})

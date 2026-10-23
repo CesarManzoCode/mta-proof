@@ -35,8 +35,28 @@ type ServeConfig struct {
 	Ready    func(net.Addr) // called once the API listens
 }
 
-// Serve runs the real-mode engine with the wall clock until ctx is done.
+// Serve runs the ingest API alone with the wall clock until ctx is done.
 func Serve(ctx context.Context, cfg ServeConfig) error {
+	return run(ctx, cfg, nil)
+}
+
+// RunConfig configures the real-mode engine with delivery.
+type RunConfig struct {
+	DB        string
+	Config    *Config
+	Transport Transport // nil: TCP from the configured source addresses
+	Resolver  Resolver  // nil: DNS queries to Config.DNS
+	Ready     func(net.Addr)
+}
+
+// Run runs the ingest API and delivery with the wall clock until ctx is
+// done (mtaengine run).
+func Run(ctx context.Context, rc RunConfig) error {
+	cfg := rc.Config
+	return run(ctx, ServeConfig{DB: rc.DB, HTTPAddr: cfg.HTTP, Seed: cfg.Seed, MaxBatch: cfg.MaxBatch, Ready: rc.Ready}, &rc)
+}
+
+func run(ctx context.Context, cfg ServeConfig, rc *RunConfig) error {
 	st, err := store.Open(cfg.DB)
 	if err != nil {
 		return err
@@ -52,10 +72,30 @@ func Serve(ctx context.Context, cfg ServeConfig) error {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	if rc != nil {
+		core.SetDelivery(rc.Config, clock.Rand(cfg.Seed, "engine.mx"))
+	}
 	runner := NewRunner(core, st, cfg.MaxBatch)
 	runErr := make(chan error, 1)
 	go func() { runErr <- runner.Run(ctx) }()
-	srv := &http.Server{Handler: NewAPI(runner), ReadHeaderTimeout: 10 * time.Second}
+	var onAccept func()
+	delErr := make(chan error, 1)
+	delivering := rc != nil
+	if delivering {
+		dc := rc.Config
+		tr, res := rc.Transport, rc.Resolver
+		if tr == nil {
+			tr = &TCPTransport{ConnectTimeout: secondsDur(dc.Timeouts.ConnectS),
+				CommandTimeout: secondsDur(dc.Timeouts.CommandS), DataEndTimeout: secondsDur(dc.Timeouts.DataEndS)}
+		}
+		if res == nil {
+			res = &DNSResolver{Server: dc.DNS, Timeout: secondsDur(dc.Timeouts.ConnectS)}
+		}
+		d := NewDeliverer(runner, tr, res, dc.Hostname)
+		onAccept = d.Wake
+		go func() { delErr <- d.Run(ctx) }()
+	}
+	srv := &http.Server{Handler: NewAPI(runner, onAccept), ReadHeaderTimeout: 10 * time.Second}
 	srvErr := make(chan error, 1)
 	go func() { srvErr <- srv.Serve(ln) }()
 	if cfg.Ready != nil {
@@ -66,11 +106,16 @@ func Serve(ctx context.Context, cfg ServeConfig) error {
 	case <-ctx.Done():
 	case result = <-runErr:
 	case result = <-srvErr:
+	case result = <-delErr:
+		delivering = false
 	}
 	shut, done := context.WithTimeout(context.Background(), 5*time.Second)
 	defer done()
 	srv.Shutdown(shut)
 	cancel()
+	if delivering {
+		<-delErr // let connection goroutines finish before the store closes
+	}
 	if errors.Is(result, context.Canceled) || errors.Is(result, http.ErrServerClosed) {
 		result = nil
 	}

@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS messages (
 	raw            BLOB NOT NULL,
 	state          TEXT NOT NULL,
 	attempts       INTEGER NOT NULL,
+	retries        INTEGER NOT NULL DEFAULT 0,
 	next_at_ms     INTEGER NOT NULL,
 	accepted_at_ms INTEGER NOT NULL,
 	updated_at_ms  INTEGER NOT NULL
@@ -58,6 +59,14 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
 	payload_sha256 TEXT NOT NULL,
 	msg_id         TEXT NOT NULL,
 	created_at_ms  INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS suppressions (
+	tenant        TEXT NOT NULL,
+	address       TEXT NOT NULL,
+	msg_id        TEXT NOT NULL,
+	subtype       TEXT NOT NULL,
+	created_at_ms INTEGER NOT NULL,
+	PRIMARY KEY (tenant, address)
 );
 CREATE TABLE IF NOT EXISTS events (
 	seq      INTEGER PRIMARY KEY,
@@ -94,6 +103,7 @@ type Message struct {
 	Raw           []byte
 	State         string
 	Attempts      int
+	Retries       int // deferrals that advanced the retry schedule
 	NextAtMs      int64
 	AcceptedAtMs  int64
 	UpdatedAtMs   int64
@@ -105,6 +115,16 @@ type Key struct {
 	PayloadSHA256 string
 	MsgID         string
 	CreatedAtMs   int64
+}
+
+// Suppression is one suppressed recipient of a tenant and the message
+// whose permanent failure suppressed it.
+type Suppression struct {
+	Tenant      string
+	Address     string
+	MsgID       string
+	Subtype     string
+	CreatedAtMs int64
 }
 
 // Event is one row of events. Seq is assigned by SQLite in write order; the
@@ -132,10 +152,11 @@ type Event struct {
 
 // Write is one change produced by the core. Exactly one field is set.
 type Write struct {
-	InsertMessage *Message
-	UpdateMessage *Message // only state, attempts, next_at_ms and updated_at_ms are written
-	PutKey        *Key
-	Event         *Event
+	InsertMessage  *Message
+	UpdateMessage  *Message // only state, attempts, retries, next_at_ms and updated_at_ms are written
+	PutKey         *Key
+	PutSuppression *Suppression
+	Event          *Event
 }
 
 // Store is an open engine.db.
@@ -164,6 +185,10 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("store: schema: %w", err)
 	}
 	s := &Store{db: db}
+	if err := s.migrate(); err != nil {
+		db.Close()
+		return nil, err
+	}
 	mode, sync, err := s.Pragmas()
 	if err != nil {
 		db.Close()
@@ -174,6 +199,34 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("store: journal_mode=%s synchronous=%d, want wal and 2 (FULL)", mode, sync)
 	}
 	return s, nil
+}
+
+// migrate adds the columns that later schema versions introduced to a
+// database created by an earlier one.
+func (s *Store) migrate() error {
+	rows, err := s.db.Query("SELECT name FROM pragma_table_info('messages')")
+	if err != nil {
+		return fmt.Errorf("store: migrate: %w", err)
+	}
+	cols := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return err
+		}
+		cols[name] = true
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !cols["retries"] {
+		if _, err := s.db.Exec("ALTER TABLE messages ADD COLUMN retries INTEGER NOT NULL DEFAULT 0"); err != nil {
+			return fmt.Errorf("store: migrate: %w", err)
+		}
+	}
+	return nil
 }
 
 // Close closes the database.
@@ -219,15 +272,15 @@ func apply(tx *sql.Tx, w Write) error {
 	case w.InsertMessage != nil:
 		m := w.InsertMessage
 		_, err := tx.Exec(`INSERT INTO messages (n, msg_id, tenant, mail_from, rcpt, domain, msg_type,
-			payload_sha256, raw, state, attempts, next_at_ms, accepted_at_ms, updated_at_ms)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			payload_sha256, raw, state, attempts, retries, next_at_ms, accepted_at_ms, updated_at_ms)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			m.N, m.ID, m.Tenant, m.From, m.To, m.Domain, m.MsgType, m.PayloadSHA256, m.Raw,
-			m.State, m.Attempts, m.NextAtMs, m.AcceptedAtMs, m.UpdatedAtMs)
+			m.State, m.Attempts, m.Retries, m.NextAtMs, m.AcceptedAtMs, m.UpdatedAtMs)
 		return err
 	case w.UpdateMessage != nil:
 		m := w.UpdateMessage
-		res, err := tx.Exec(`UPDATE messages SET state = ?, attempts = ?, next_at_ms = ?, updated_at_ms = ?
-			WHERE msg_id = ?`, m.State, m.Attempts, m.NextAtMs, m.UpdatedAtMs, m.ID)
+		res, err := tx.Exec(`UPDATE messages SET state = ?, attempts = ?, retries = ?, next_at_ms = ?,
+			updated_at_ms = ? WHERE msg_id = ?`, m.State, m.Attempts, m.Retries, m.NextAtMs, m.UpdatedAtMs, m.ID)
 		if err != nil {
 			return err
 		}
@@ -239,6 +292,11 @@ func apply(tx *sql.Tx, w Write) error {
 		k := w.PutKey
 		_, err := tx.Exec(`INSERT OR REPLACE INTO idempotency_keys (key, payload_sha256, msg_id, created_at_ms)
 			VALUES (?, ?, ?, ?)`, k.Key, k.PayloadSHA256, k.MsgID, k.CreatedAtMs)
+		return err
+	case w.PutSuppression != nil:
+		p := w.PutSuppression
+		_, err := tx.Exec(`INSERT OR IGNORE INTO suppressions (tenant, address, msg_id, subtype, created_at_ms)
+			VALUES (?, ?, ?, ?, ?)`, p.Tenant, p.Address, p.MsgID, p.Subtype, p.CreatedAtMs)
 		return err
 	case w.Event != nil:
 		e := w.Event
@@ -269,8 +327,9 @@ func num(n int) any {
 
 // Snapshot is everything the core needs to resume.
 type Snapshot struct {
-	Messages []*Message // ordered by n
-	Keys     []*Key     // ordered by key
+	Messages     []*Message     // ordered by n
+	Keys         []*Key         // ordered by key
+	Suppressions []*Suppression // ordered by (tenant, address)
 }
 
 // Load reads the whole live state. Messages come back in msg_id sequence
@@ -278,14 +337,14 @@ type Snapshot struct {
 func (s *Store) Load() (*Snapshot, error) {
 	snap := &Snapshot{}
 	rows, err := s.db.Query(`SELECT n, msg_id, tenant, mail_from, rcpt, domain, msg_type, payload_sha256,
-		raw, state, attempts, next_at_ms, accepted_at_ms, updated_at_ms FROM messages ORDER BY n`)
+		raw, state, attempts, retries, next_at_ms, accepted_at_ms, updated_at_ms FROM messages ORDER BY n`)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
 		m := &Message{}
 		if err := rows.Scan(&m.N, &m.ID, &m.Tenant, &m.From, &m.To, &m.Domain, &m.MsgType,
-			&m.PayloadSHA256, &m.Raw, &m.State, &m.Attempts, &m.NextAtMs, &m.AcceptedAtMs,
+			&m.PayloadSHA256, &m.Raw, &m.State, &m.Attempts, &m.Retries, &m.NextAtMs, &m.AcceptedAtMs,
 			&m.UpdatedAtMs); err != nil {
 			rows.Close()
 			return nil, err
@@ -300,13 +359,30 @@ func (s *Store) Load() (*Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	for rows.Next() {
 		k := &Key{}
 		if err := rows.Scan(&k.Key, &k.PayloadSHA256, &k.MsgID, &k.CreatedAtMs); err != nil {
+			rows.Close()
 			return nil, err
 		}
 		snap.Keys = append(snap.Keys, k)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows, err = s.db.Query(`SELECT tenant, address, msg_id, subtype, created_at_ms FROM suppressions
+		ORDER BY tenant, address`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		p := &Suppression{}
+		if err := rows.Scan(&p.Tenant, &p.Address, &p.MsgID, &p.Subtype, &p.CreatedAtMs); err != nil {
+			return nil, err
+		}
+		snap.Suppressions = append(snap.Suppressions, p)
 	}
 	return snap, rows.Err()
 }
