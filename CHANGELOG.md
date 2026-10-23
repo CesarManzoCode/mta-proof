@@ -1,6 +1,6 @@
 # Changelog
 
-## [Sin publicar]
+## [K1] - 2026-10-23
 
 ### Añadido
 
@@ -26,13 +26,12 @@
 - Propiedades `no_loss`, `bounded_duplicates`, `idempotency` y `dns_mx` sobre la corrida real; `receiver_limits` decide ahora sobre el escenario simulado `limits` y sobre la corrida real. Con ellas, el reporte trae las diez propiedades de K1.
 - Zona de laboratorio: `fallback.test`, cuyo MX preferido no escucha.
 
+### Corregido
+
+- El DNS de laboratorio en un puerto elegido por el sistema ya no falla al arrancar cuando el puerto TCP del mismo número está ocupado: reintenta con otro puerto. Un puerto explícito sigue fallando en el acto.
+
 ### Decisiones
 
-- Motor, simulador y herramienta de depuración en Go; verificador en Python sin dependencias, sin código compartido con el motor.
-- Cola y registro de eventos en SQLite (WAL, `synchronous=FULL`), elegido tras medir cero pérdidas en 30 `kill -9`.
-- Toda corrida ocurre en un espacio de nombres de red sin privilegios con solo `lo`: el tráfico no puede salir de la máquina.
-- Haraka 3.3.5 como MTA externo para la validación de caja negra.
-- Licencia MIT.
 - Parámetros de cada tipo de regla, zona DNS y protocolo del socket de control fijados en el contrato (3.1, 3.4, 3.9 y 4.4). El cambio de perfil en caliente vale para conexiones nuevas: cambiar de perfil a mitad de una conexión mezclaría contadores de dos perfiles; quien necesite forzarlo corta las conexiones.
 - La clave de idempotencia es global y no por tenant: sin autenticación, el tenant viaja en el cuerpo y forma parte del payload comparado; reusar una clave con otro tenant da 409.
 - El motor guarda el mensaje RFC 5322 construido al ingresar y envía los mismos bytes en cada intento, así un duplicado tiene el mismo `sha256` en el receptor.
@@ -51,3 +50,17 @@
 - `no_loss` cruza además cada 202 de la API (registrado por el orquestador en `ingest.jsonl`) con los eventos `accepted`: sin esa fuente, un 202 sin commit no dejaría rastro en `engine.db`.
 - La campaña real va a 30 mensajes por segundo (supuesto) para que la carga dure más que el periodo de adaptación de 300 s de los perfiles y una violación en la corrida real pueda contar.
 - `events.jsonl` usa los escapes de `json.dumps` de Python (`ensure_ascii`), para que el verificador lo reconstruya desde `engine.db` con la biblioteca estándar y compare bytes.
+
+### Verificación
+
+- Al cerrar K1, `make check` y `make verify` pasan con las diez propiedades de K1: 10 000 mensajes aceptados bajo 30 `kill -9` del motor (5 en la ventana entre el 250 del receptor y su registro) sin ninguna pérdida, todo duplicado del receptor explicado por una falla inyectada, cero violaciones contadas de los límites del receptor y memoria máxima de 332 771 328 bytes. Cifras de la corrida registrada en `fa3eedd`; ver «Resultados» en el README.
+
+## [K0] - 2026-10-22
+
+### Decisiones
+
+- Motor, simulador y herramienta de depuración en Go; verificador en Python sin dependencias, sin código compartido con el motor.
+- Cola y registro de eventos en SQLite (WAL, `synchronous=FULL`), elegido tras medir cero pérdidas en 30 `kill -9`.
+- Toda corrida ocurre en un espacio de nombres de red sin privilegios con solo `lo`: el tráfico no puede salir de la máquina.
+- Haraka 3.3.5 como MTA externo para la validación de caja negra.
+- Licencia MIT.
