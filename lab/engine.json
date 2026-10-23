@@ -37,5 +37,6 @@
     "src_ip": {"*": {"connections": 50}}
   },
   "adapt": {"rate_window_s": 60},
-  "tenant_pause": {"bounce_threshold": 0.04, "window": 200, "resume_s": 300}
+  "tenant_pause": {"bounce_threshold": 0.04, "window": 200, "resume_s": 300},
+  "tls": {"ca_file": "", "default": "opportunistic", "domains": {"tls-required.test": "required"}, "providers": {}}
 }

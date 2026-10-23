@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"crypto/x509"
 	"sync"
 	"time"
 )
@@ -17,6 +18,8 @@ type Deliverer struct {
 	res  Resolver
 	helo string
 	wake chan struct{}
+	// Roots are the CAs a STARTTLS certificate must chain to (tls.ca_file).
+	Roots *x509.CertPool
 
 	mu    sync.Mutex
 	inbox map[int64]chan Action
@@ -131,7 +134,7 @@ func (d *Deliverer) conn(ctx context.Context, open Action, ch chan Action) {
 		delete(d.inbox, open.Conn)
 		d.mu.Unlock()
 	}()
-	conn, res := openConn(ctx, d.tr, open.Open, d.helo)
+	conn, res := openConn(ctx, d.tr, open.Open, d.helo, d.Roots)
 	if conn != nil {
 		stop := context.AfterFunc(ctx, func() { conn.Close() })
 		defer stop()

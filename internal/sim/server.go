@@ -3,6 +3,7 @@ package sim
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,6 +33,9 @@ const (
 // live connections and the 250 holds of the control socket.
 type Server struct {
 	R *Receiver
+	// TLS is the configuration of the STARTTLS handshake; the receiver
+	// must offer STARTTLS (Config.StartTLS) for it to be used.
+	TLS *tls.Config
 
 	mu        sync.Mutex
 	listeners []net.Listener
@@ -42,7 +46,8 @@ type Server struct {
 }
 
 type conn struct {
-	nc      net.Conn
+	nc      net.Conn // the socket; Cut closes it, which also ends a TLS session on it
+	rw      net.Conn // what replies are written to: nc, or the TLS session over it
 	sess    *Session
 	mu      sync.Mutex
 	cutRule string
@@ -123,7 +128,7 @@ func (s *Server) serveConn(host string, nc net.Conn) {
 	if err != nil {
 		return
 	}
-	c := &conn{nc: nc, sess: sess, cutCh: make(chan struct{})}
+	c := &conn{nc: nc, rw: nc, sess: sess, cutCh: make(chan struct{})}
 	s.mu.Lock()
 	if s.closing {
 		s.mu.Unlock()
@@ -154,6 +159,16 @@ func (s *Server) serveConn(host string, nc net.Conn) {
 			continue
 		}
 		res = sess.Line(line)
+		if res.StartTLS {
+			if !s.send(c, res) {
+				return
+			}
+			if br = s.handshake(c); br == nil {
+				return
+			}
+			res = Result{}
+			continue
+		}
 		if res.Reply == nil || res.Reply.Code != 354 {
 			continue
 		}
@@ -190,11 +205,37 @@ func (s *Server) send(c *conn, res Result) bool {
 	if res.Delay > 0 {
 		time.Sleep(res.Delay)
 	}
-	if _, err := c.nc.Write(res.Wire()); err != nil {
+	if _, err := c.rw.Write(res.Wire()); err != nil {
 		s.lost(c)
 		return false
 	}
 	return true
+}
+
+// handshake runs the server side of the TLS handshake after the 220 to
+// STARTTLS [R-3207 §4] and returns the reader of the TLS session, or nil
+// when the handshake failed and the connection is over.
+func (s *Server) handshake(c *conn) *bufio.Reader {
+	if s.TLS == nil {
+		c.sess.TLSFailed(errors.New("no TLS configuration"))
+		return nil
+	}
+	tc := tls.Server(c.nc, s.TLS)
+	c.nc.SetDeadline(time.Now().Add(serverTimeout))
+	err := tc.Handshake()
+	c.nc.SetDeadline(time.Time{})
+	if err != nil {
+		if rule := c.cutReason(); rule != "" {
+			c.sess.Cut(rule)
+		} else {
+			c.sess.TLSFailed(err)
+		}
+		return nil
+	}
+	st := tc.ConnectionState()
+	c.sess.TLSStarted(tls.VersionName(st.Version), tls.CipherSuiteName(st.CipherSuite))
+	c.rw = tc
+	return bufio.NewReaderSize(tc, maxCommandLine)
 }
 
 // lost records the end of a connection the simulator did not end itself.

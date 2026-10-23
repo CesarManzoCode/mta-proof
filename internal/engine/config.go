@@ -35,6 +35,9 @@ type Config struct {
 	// TenantPause pauses a tenant whose bounce rate crosses a threshold;
 	// nil turns the monitor off.
 	TenantPause *TenantPause `json:"tenant_pause"`
+	// TLS is the STARTTLS policy (D16); nil is opportunistic everywhere
+	// with no trusted CA.
+	TLS *TLS `json:"tls"`
 
 	pools      []*srcPool
 	tenantPool map[string]*srcPool
@@ -227,6 +230,72 @@ type TenantPause struct {
 	ResumeS         float64 `json:"resume_s"`
 }
 
+// STARTTLS policies (D16, R-3207 §4.1 and §6).
+const (
+	// TLSOpportunistic uses STARTTLS when offered without enforcing the
+	// certificate, and sends in plain text when the handshake fails.
+	TLSOpportunistic = "opportunistic"
+	// TLSRequired needs STARTTLS with a certificate of the trusted CA for
+	// the MX host name, or the attempt is deferred with subtype TLSPolicy.
+	TLSRequired = "required"
+)
+
+// TLS is the STARTTLS policy of each destination: the policy of its
+// domain, else of its provider, else Default. CAFile is the PEM of the
+// CAs the engine trusts (the test CA of the run); empty trusts none, so a
+// required destination can never be delivered. The system roots are never
+// used.
+type TLS struct {
+	CAFile    string            `json:"ca_file"`
+	Default   string            `json:"default"`
+	Domains   map[string]string `json:"domains"`
+	Providers map[string]string `json:"providers"`
+}
+
+// tlsPolicy returns the STARTTLS policy of a destination.
+func (c *Config) tlsPolicy(domain, provider string) string {
+	t := c.TLS
+	if t == nil {
+		return TLSOpportunistic
+	}
+	if p, ok := t.Domains[strings.ToLower(domain)]; ok {
+		return p
+	}
+	if p, ok := t.Providers[provider]; ok && provider != "" {
+		return p
+	}
+	return t.Default
+}
+
+func (t *TLS) validate() error {
+	if t.Default == "" {
+		t.Default = TLSOpportunistic
+	}
+	check := func(where, p string) error {
+		if p != TLSOpportunistic && p != TLSRequired {
+			return fmt.Errorf("tls.%s: policy %q is not %s or %s", where, p, TLSOpportunistic, TLSRequired)
+		}
+		return nil
+	}
+	if err := check("default", t.Default); err != nil {
+		return err
+	}
+	for d, p := range t.Domains {
+		if d != strings.ToLower(d) {
+			return fmt.Errorf("tls.domains: %q must be lower case", d)
+		}
+		if err := check("domains."+d, p); err != nil {
+			return err
+		}
+	}
+	for name, p := range t.Providers {
+		if err := check("providers."+name, p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func lookupLimit(m map[string]Limit, key string) Limit {
 	if l, ok := m[key]; ok {
 		return l
@@ -352,6 +421,11 @@ func (c *Config) Validate() error {
 	}
 	if p := c.TenantPause; p != nil && (!(p.BounceThreshold > 0 && p.BounceThreshold < 1) || p.Window < 1 || !(p.ResumeS > 0)) {
 		return errors.New("tenant_pause needs 0 < bounce_threshold < 1, window >= 1 and resume_s > 0")
+	}
+	if c.TLS != nil {
+		if err := c.TLS.validate(); err != nil {
+			return err
+		}
 	}
 	return nil
 }

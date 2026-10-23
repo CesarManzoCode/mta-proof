@@ -11,10 +11,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"syscall"
 
 	"github.com/CesarManzoCode/mta-proof/internal/sim"
+	"github.com/CesarManzoCode/mta-proof/internal/tlslab"
 )
 
 func main() {
@@ -37,6 +39,7 @@ func serve(args []string) error {
 	smtpPort := fs.Int("smtp-port", 25, "SMTP port on every MX host address")
 	control := fs.String("control", "", "Unix control socket (default <out>/control.sock)")
 	noSync := fs.Bool("no-sync", false, "skip the fsync after each data_end")
+	tlsKind := fs.String("tls", tlslab.Off, "STARTTLS on every host with this certificate: off, valid, other-ca or wrong-name; the test CA goes to <out>/tls/ca.pem")
 	fs.Parse(args)
 	if *out == "" {
 		return errors.New("-out is required")
@@ -63,13 +66,34 @@ func serve(args []string) error {
 	if err := os.MkdirAll(*out, 0o755); err != nil {
 		return err
 	}
-	recv, err := sim.NewReceiver(sim.Config{Dir: *out, Profiles: profiles, NoSync: *noSync})
+	if *tlsKind != tlslab.Off && !slices.Contains(tlslab.Kinds, *tlsKind) {
+		return fmt.Errorf("-tls %q: want off or one of %v", *tlsKind, tlslab.Kinds)
+	}
+	recv, err := sim.NewReceiver(sim.Config{Dir: *out, Profiles: profiles, NoSync: *noSync, StartTLS: *tlsKind != tlslab.Off})
 	if err != nil {
 		return err
 	}
 	defer recv.Close()
 	srv := sim.NewServer(recv)
 	defer srv.Close()
+	if *tlsKind != tlslab.Off {
+		// A new test CA for every run; the engine trusts only its PEM.
+		lab, err := tlslab.NewLab(recv.Hosts())
+		if err != nil {
+			return err
+		}
+		if srv.TLS, err = lab.ServerConfig(*tlsKind); err != nil {
+			return err
+		}
+		caPath := filepath.Join(*out, "tls", "ca.pem")
+		if err := os.MkdirAll(filepath.Dir(caPath), 0o755); err != nil {
+			return err
+		}
+		if err := lab.WriteCA(caPath); err != nil {
+			return err
+		}
+		log.Printf("tls %s, test CA %s", *tlsKind, caPath)
+	}
 
 	if *dnsAddr != "" {
 		d, err := sim.ServeDNSZone(zone, *dnsAddr)

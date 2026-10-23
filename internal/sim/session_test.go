@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -468,5 +469,72 @@ func TestHeaderValue(t *testing.T) {
 	}
 	if got := headerValue([]byte("A: b\r\n\r\nX-Mtaproof-Id: no\r\n"), "X-Mtaproof-Id"); got != "" {
 		t.Fatalf("body header picked: %q", got)
+	}
+}
+
+// TestSessionSTARTTLS follows R-3207: STARTTLS is offered only when the
+// receiver is configured for it and not again over TLS, a completed
+// handshake resets the session to the greeting state and is logged with
+// its version and suite, and a message received over TLS carries them on
+// its data_end.
+func TestSessionSTARTTLS(t *testing.T) {
+	p := testProfile(t, 0, "")
+	plain, _, _ := newTestReceiver(t, p)
+	s, _, _ := plain.Open("mx.p.test", ipKnown, ipMX)
+	if res := s.Line("EHLO c.test"); strings.Contains(string(res.Wire()), "STARTTLS") {
+		t.Fatalf("STARTTLS offered without TLS: %q", res.Wire())
+	}
+	if res := s.Line("STARTTLS"); res.Reply.Code != 502 || res.StartTLS {
+		t.Fatalf("STARTTLS without TLS: %+v", res)
+	}
+
+	dir := t.TempDir()
+	r, err := NewReceiver(Config{Dir: dir, Profiles: map[string]*Profile{"p": p}, Clock: &fakeClock{t: time.UnixMilli(1)}, StartTLS: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { r.Close() })
+	s, _, _ = r.Open("mx.p.test", ipKnown, ipMX)
+	if res := s.Line("STARTTLS"); res.Reply.Code != 503 {
+		t.Fatalf("STARTTLS before EHLO: %+v", res.Reply)
+	}
+	if res := s.Line("EHLO c.test"); !strings.Contains(string(res.Wire()), "250-STARTTLS") {
+		t.Fatalf("STARTTLS not offered: %q", res.Wire())
+	}
+	if res := s.Line("STARTTLS now"); res.Reply.Code != 501 {
+		t.Fatalf("STARTTLS with a parameter: %+v", res.Reply)
+	}
+	if res := s.Line("STARTTLS"); res.Reply.Code != 220 || !res.StartTLS {
+		t.Fatalf("STARTTLS: %+v", res)
+	}
+	s.TLSStarted("TLS 1.3", "TLS_AES_128_GCM_SHA256")
+	if res := s.Line("MAIL FROM:<a@b.test>"); res.Reply.Code != 503 {
+		t.Fatalf("MAIL right after the handshake: %+v", res.Reply)
+	}
+	if res := s.Line("EHLO c.test"); strings.Contains(string(res.Wire()), "STARTTLS") {
+		t.Fatalf("STARTTLS offered over TLS: %q", res.Wire())
+	}
+	s.Line("MAIL FROM:<a@b.test>")
+	s.Line("RCPT TO:<u@p.test>")
+	s.Line("DATA")
+	if res := s.Data([]byte("X-Mtaproof-Id: m1\r\n\r\nhi\r\n")); res.Reply.Code != 250 {
+		t.Fatalf("data: %+v", res.Reply)
+	}
+	s2, _, _ := r.Open("mx.p.test", ipKnown, ipMX)
+	s2.Line("EHLO c.test")
+	s2.Line("STARTTLS")
+	s2.TLSFailed(errors.New("remote error: tls: bad certificate"))
+	if !s2.Ended() {
+		t.Fatal("session alive after a failed handshake")
+	}
+	evs := readEvents(t, dir)
+	st := eventsOf(evs, EvStartTLS)
+	if len(st) != 2 || st[0]["tls"].(map[string]any)["version"] != "TLS 1.3" ||
+		st[1]["tls"].(map[string]any)["error"] != "remote error: tls: bad certificate" {
+		t.Fatalf("starttls lines %v", st)
+	}
+	de := eventsOf(evs, EvDataEnd)
+	if len(de) != 1 || de[0]["tls"].(map[string]any)["cipher"] != "TLS_AES_128_GCM_SHA256" {
+		t.Fatalf("data_end %v", de)
 	}
 }

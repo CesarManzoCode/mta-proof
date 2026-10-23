@@ -187,13 +187,13 @@ class Lab:
         self.sim = None
         self.engine = None
 
-    def start_sim(self):
+    def start_sim(self, extra=()):
         self.sim = Process("mtasim", [
             os.path.join(self.bin, "mtasim"), "serve", "--out", self.run_dir,
             "--dns", "127.0.0.1:53", "--smtp-port", "25",
             "--profiles", "profiles", "--zone", os.path.join("lab", "zone.json"),
             "--research", os.path.join("vault", "RESEARCH.md"),
-            "--control", self.control_path,
+            "--control", self.control_path, *extra,
         ], self.root, os.path.join(self.run_dir, "mtasim.log"))
 
     def start_engine(self):

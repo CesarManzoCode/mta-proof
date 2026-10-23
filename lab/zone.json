@@ -24,6 +24,8 @@
 
     {"name": "nullmx.test", "type": "MX", "pref": 0, "host": "."},
 
+    {"name": "tls-required.test", "type": "MX", "pref": 10, "host": "mx1.baseline.test"},
+
     {"name": "fallback.test", "type": "MX", "pref": 10, "host": "mx1.fallback.test"},
     {"name": "fallback.test", "type": "MX", "pref": 20, "host": "mx2.fallback.test"},
     {"name": "mx1.fallback.test", "type": "A", "addr": "127.0.1.7"},

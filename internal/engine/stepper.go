@@ -262,7 +262,7 @@ func (s *Stepper) act(a Action) error {
 		s.conns[a.Conn] = p
 		var res OpenResult
 		return s.start(p, func() {
-			p.conn, res = openConn(context.WithValue(s.ctx, sleeperKey{}, p), s.Transport, a.Open, s.Helo)
+			p.conn, res = openConn(context.WithValue(s.ctx, sleeperKey{}, p), s.Transport, a.Open, s.Helo, nil)
 		}, func() []Action {
 			if p.conn == nil {
 				delete(s.conns, a.Conn)

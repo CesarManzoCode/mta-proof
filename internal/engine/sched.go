@@ -39,6 +39,7 @@ type OpenSpec struct {
 	Src  netip.Addr
 	Port int
 	MX   []MXHost
+	TLS  string // STARTTLS policy of the destination (D16)
 }
 
 // SendSpec is the message of one transaction.
@@ -58,6 +59,7 @@ var (
 	decUnreachable = classify.Decision{Class: classify.Transient, Subtype: classify.Connection, RuleID: "rfc5321.mx_unreachable"}
 	decNoReply     = classify.Decision{Class: classify.Transient, Subtype: classify.Connection, RuleID: "engine.no_reply"}
 	decSilentClose = classify.Decision{Class: classify.Transient, Subtype: classify.Connection, RuleID: "yahoo.silent_close"}
+	decTLSPolicy   = classify.Decision{Class: classify.Transient, Subtype: classify.TLSPolicy, RuleID: "rfc3207.tls_required"}
 )
 
 // nullMXReply is the reply the engine records for a null MX destination
@@ -541,7 +543,7 @@ func (c *Core) serve(q *queue, cs *connState, now int64) served {
 	c.recordStart(nc.keys, now)
 	c.chargeStart(m.ID, src, now)
 	return served{progress: true, acts: []Action{{Kind: ActOpen, Conn: nc.id,
-		Open: &OpenSpec{Src: src, Port: s.cfg.SMTPPort, MX: rt.mx}}}}
+		Open: &OpenSpec{Src: src, Port: s.cfg.SMTPPort, MX: rt.mx, TLS: s.cfg.tlsPolicy(q.key.domain, rt.provider)}}}}
 }
 
 // pickSrc chooses the source address of a new connection of queue k
@@ -799,9 +801,18 @@ func (c *Core) Opened(id int64, res OpenResult) []Action {
 	if len(res.Tried) > 0 {
 		d["tried"] = res.Tried
 	}
+	for _, t := range res.TLS {
+		c.tlsNegotiated(m, r, id, t)
+	}
 	if !res.OK && res.Reply == nil {
 		delete(s.conns, id)
-		c.deferInflight(m, r, nil, decUnreachable, true, d)
+		dec := decUnreachable
+		if res.TLSFailed {
+			// The receiver answered but could not meet the required
+			// policy at any address: a counted deferral [R-3207 §6].
+			dec = decTLSPolicy
+		}
+		c.deferInflight(m, r, nil, dec, true, d)
 		return nil
 	}
 	if res.Addr != "" {
@@ -818,6 +829,21 @@ func (c *Core) Opened(id int64, res OpenResult) []Action {
 	cs.mxHost, cs.state = res.MXHost, connBusy
 	cs.msgs = 1
 	return []Action{{Kind: ActSend, Conn: id, Send: &SendSpec{MsgID: m.ID, From: m.From, To: m.To, Raw: m.Raw}}}
+}
+
+// tlsNegotiated records one STARTTLS negotiation of connection id, opened
+// for m's attempt.
+func (c *Core) tlsNegotiated(m *store.Message, r Route, id int64, t TLSResult) {
+	str := func(v string) any {
+		if v == "" {
+			return nil
+		}
+		return v
+	}
+	c.event(&store.Event{Kind: KindTLSNegotiated, Provider: r.Provider, MXHost: t.Host, SrcIP: r.SrcIP,
+		Attempt: m.Attempts, Detail: detail(map[string]any{"conn": id, "addr": t.Addr, "policy": t.Policy,
+			"version": str(t.Version), "cipher": str(t.Cipher), "verified": t.Verified, "error": str(t.Error),
+			"fallback": t.Fallback})}, m)
 }
 
 // Sent records the outcome of the transaction of msgID on connection id

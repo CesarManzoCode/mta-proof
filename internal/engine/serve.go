@@ -2,13 +2,16 @@ package engine
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"time"
 
 	"github.com/CesarManzoCode/mta-proof/internal/clock"
 	"github.com/CesarManzoCode/mta-proof/internal/store"
+	"github.com/CesarManzoCode/mta-proof/internal/tlslab"
 )
 
 // OpenCore loads the store into a new core and commits start-up recovery
@@ -57,6 +60,13 @@ func Run(ctx context.Context, rc RunConfig) error {
 }
 
 func run(ctx context.Context, cfg ServeConfig, rc *RunConfig) error {
+	var roots *x509.CertPool
+	if rc != nil && rc.Config.TLS != nil && rc.Config.TLS.CAFile != "" {
+		var err error
+		if roots, err = tlslab.LoadPool(rc.Config.TLS.CAFile); err != nil {
+			return fmt.Errorf("tls.ca_file: %w", err)
+		}
+	}
 	st, err := store.Open(cfg.DB)
 	if err != nil {
 		return err
@@ -92,6 +102,7 @@ func run(ctx context.Context, cfg ServeConfig, rc *RunConfig) error {
 			res = &DNSResolver{Server: dc.DNS, Timeout: secondsDur(dc.Timeouts.ConnectS)}
 		}
 		d := NewDeliverer(runner, tr, res, dc.Hostname)
+		d.Roots = roots
 		onAccept = d.Wake
 		go func() { delErr <- d.Run(ctx) }()
 	}

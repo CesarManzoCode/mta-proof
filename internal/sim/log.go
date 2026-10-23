@@ -44,6 +44,15 @@ type Event struct {
 	Text     *string `json:"text,omitempty"`
 	Rule     string  `json:"rule,omitempty"`
 	Counted  *bool   `json:"counted,omitempty"`
+	TLS      *TLS    `json:"tls,omitempty"`
+}
+
+// TLS is the tls field of a starttls line (the outcome of the handshake)
+// and of a data_end received over TLS (the session's version and suite).
+type TLS struct {
+	Version string `json:"version,omitempty"`
+	Cipher  string `json:"cipher,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
 
 // Log appends events to receiver.jsonl. Sync is called after every

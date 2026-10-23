@@ -34,6 +34,9 @@ type Config struct {
 	// NoSync skips the fsync of each data_end and stored message (for
 	// in-process runs whose durability does not matter).
 	NoSync bool
+	// StartTLS offers the STARTTLS extension [R-3207] on every host; the
+	// transport runs the handshake.
+	StartTLS bool
 }
 
 // Receiver holds the state shared by all sessions: profiles, the host to
@@ -48,6 +51,7 @@ type Receiver struct {
 	hosts    map[string]string
 	state    map[string]*profileState
 	nextConn int64
+	startTLS bool
 }
 
 type windowKey struct {
@@ -76,6 +80,7 @@ func NewReceiver(cfg Config) (*Receiver, error) {
 		profiles: cfg.Profiles,
 		hosts:    map[string]string{},
 		state:    map[string]*profileState{},
+		startTLS: cfg.StartTLS,
 	}
 	names := make([]string, 0, len(cfg.Profiles))
 	for name := range cfg.Profiles {
@@ -195,6 +200,10 @@ type Result struct {
 	// MsgID and Accepted describe the reply to DATA (data_end).
 	MsgID    string
 	Accepted bool
+	// StartTLS is set on the 220 reply to STARTTLS: the transport runs
+	// the TLS handshake right after sending it and reports it with
+	// TLSStarted or TLSFailed.
+	StartTLS bool
 }
 
 // Wire renders the reply as it goes on the connection.
@@ -231,6 +240,7 @@ type Session struct {
 	inData   bool
 	dropRule string
 	ended    bool
+	tls      *TLS // the session runs over TLS
 }
 
 // ErrUnknownHost is returned by Open for a host no profile serves.
@@ -309,7 +319,9 @@ func (s *Session) Line(line string) Result {
 		return res
 	case "VRFY":
 		return s.reply(Response{252, "2.5.0", "Cannot VRFY user, but will accept message and attempt delivery"}, StageAny)
-	case "STARTTLS", "EXPN", "HELP", "AUTH", "BDAT":
+	case "STARTTLS":
+		return s.cmdStartTLS(arg)
+	case "EXPN", "HELP", "AUTH", "BDAT":
 		return s.reply(Response{502, "5.5.1", "Command not implemented"}, StageAny)
 	default:
 		return s.reply(Response{500, "5.5.2", "Syntax error, command unrecognized"}, StageAny)
@@ -329,7 +341,53 @@ func (s *Session) cmdHello(verb, arg string) Result {
 	}
 	res := s.reply(Response{Code: 250, Text: "ENHANCEDSTATUSCODES"}, StageEHLO)
 	res.Ext = []string{s.host + " greets " + arg, "8BITMIME"}
+	// R-3207 §4.2: STARTTLS is not offered again once TLS is active.
+	if s.r.startTLS && s.tls == nil {
+		res.Ext = append(res.Ext, "STARTTLS")
+	}
 	return res
+}
+
+// cmdStartTLS answers STARTTLS [R-3207 §4]: 220 when offered, with the
+// handshake left to the transport.
+func (s *Session) cmdStartTLS(arg string) Result {
+	switch {
+	case !s.r.startTLS:
+		return s.reply(Response{502, "5.5.1", "Command not implemented"}, StageAny)
+	case arg != "":
+		return s.reply(Response{501, "5.5.4", "Syntax error (no parameters allowed)"}, StageAny)
+	case s.tls != nil || !s.greeted || s.inTx:
+		return s.reply(Response{503, "5.5.1", "Bad sequence of commands"}, StageAny)
+	}
+	res := s.reply(Response{220, "2.0.0", "Ready to start TLS"}, StageAny)
+	res.StartTLS = true
+	return res
+}
+
+// TLSStarted records a completed handshake. The SMTP state goes back to
+// the one after the greeting and what the client said before is
+// forgotten [R-3207 §4.2]: the client must send EHLO again.
+func (s *Session) TLSStarted(version, cipher string) {
+	s.r.mu.Lock()
+	defer s.r.mu.Unlock()
+	if s.ended {
+		return
+	}
+	s.tls = &TLS{Version: version, Cipher: cipher}
+	s.emit(Event{Ev: EvStartTLS, TLS: s.tls})
+	s.resetTx()
+	s.greeted = false
+}
+
+// TLSFailed records a handshake that failed; the connection is closed.
+func (s *Session) TLSFailed(err error) {
+	s.r.mu.Lock()
+	defer s.r.mu.Unlock()
+	if s.ended {
+		return
+	}
+	s.emit(Event{Ev: EvStartTLS, TLS: &TLS{Error: err.Error()}})
+	s.end(EvClose, "")
 }
 
 func (s *Session) cmdMail(arg string) Result {
@@ -478,7 +536,7 @@ func (s *Session) finishData(resp Response, msgID, sum string) Result {
 	from := s.mailFrom
 	s.emit(Event{
 		Ev: EvDataEnd, MailFrom: &from, Rcpt: strings.Join(s.rcpts, ","),
-		MsgID: msgID, Sha256: sum, Code: resp.Code, Enhanced: &resp.Enhanced, Text: &resp.Text,
+		MsgID: msgID, Sha256: sum, Code: resp.Code, Enhanced: &resp.Enhanced, Text: &resp.Text, TLS: s.tls,
 	})
 	s.resetTx()
 	return Result{

@@ -10,15 +10,17 @@ import traceback
 from verifier import context, netns, report
 from verifier.props import (backoff_expiry, bounded_duplicates, classification, destination_isolation,
                             determinism, dns_mx, idempotency, ip_warmup, no_loss, profile_sources,
-                            receiver_limits, resources, tenant_pause)
+                            receiver_limits, resources, tenant_pause, tls_policy)
 
 # Implemented properties, in run order. The first of no_loss,
 # bounded_duplicates, idempotency, dns_mx and receiver_limits runs the real
-# campaign; the others reuse it. resources goes last: it reads the memory
-# peak and the duration of everything before it.
+# campaign; the others reuse it. tls_policy runs its own real runs after the
+# campaign. resources goes last: it reads the memory peak and the duration
+# of everything before it.
 PROPERTIES = {
     m.NAME: m for m in (profile_sources, classification, backoff_expiry, determinism, ip_warmup,
-                        tenant_pause, destination_isolation, no_loss, bounded_duplicates, idempotency, dns_mx, receiver_limits, resources)
+                        tenant_pause, destination_isolation, no_loss, bounded_duplicates, idempotency, dns_mx, receiver_limits,
+                        tls_policy, resources)
 }
 
 
