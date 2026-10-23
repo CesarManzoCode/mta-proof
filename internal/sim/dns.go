@@ -217,13 +217,8 @@ type DNSServer struct {
 // ServeDNSZone starts UDP and TCP servers on addr and returns once both
 // listen. Use port 0 only with a host that resolves to one address.
 func ServeDNSZone(z *Zone, addr string) (*DNSServer, error) {
-	udp, err := net.ListenPacket("udp", addr)
+	udp, tcp, err := listenUDPTCP(addr)
 	if err != nil {
-		return nil, err
-	}
-	tcp, err := net.Listen("tcp", udp.LocalAddr().String())
-	if err != nil {
-		udp.Close()
 		return nil, err
 	}
 	s := &DNSServer{errs: make(chan error, 2)}
@@ -249,6 +244,27 @@ func ServeDNSZone(z *Zone, addr string) (*DNSServer, error) {
 		}
 	}
 	return s, nil
+}
+
+// listenUDPTCP opens UDP and TCP on the same address. With port 0 the
+// kernel picks the UDP port, and that port may be taken for TCP by another
+// process, so it tries again with a new port.
+func listenUDPTCP(addr string) (net.PacketConn, net.Listener, error) {
+	_, port, _ := net.SplitHostPort(addr)
+	for try := 0; ; try++ {
+		udp, err := net.ListenPacket("udp", addr)
+		if err != nil {
+			return nil, nil, err
+		}
+		tcp, err := net.Listen("tcp", udp.LocalAddr().String())
+		if err == nil {
+			return udp, tcp, nil
+		}
+		udp.Close()
+		if port != "0" || try == 20 {
+			return nil, nil, err
+		}
+	}
 }
 
 // Addr returns the UDP address the server listens on.
