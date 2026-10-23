@@ -33,7 +33,7 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(cli.select("resources,classification"), ["classification", "resources"])
         self.assertEqual(cli.select(None), list(cli.PROPERTIES))
         with self.assertRaises(SystemExit):
-            cli.select("debug_timeline")
+            cli.select("mutation_detection")
 
 
 class ParamsTest(unittest.TestCase):

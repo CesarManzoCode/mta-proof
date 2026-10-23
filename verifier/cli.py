@@ -8,21 +8,23 @@ import time
 import traceback
 
 from verifier import context, netns, report
-from verifier.props import (backoff_expiry, bounded_duplicates, classification, destination_isolation,
-                            determinism, dns_mx, idempotency, ip_warmup, no_loss, outbound_auth,
-                            profile_sources, receiver_limits, resources, rfc5322_format, tenant_pause,
-                            tls_policy)
+from verifier.props import (backoff_expiry, bounded_duplicates, classification, debug_aggregates,
+                            debug_timeline, destination_isolation, determinism, dns_mx, idempotency,
+                            ip_warmup, no_loss, outbound_auth, profile_sources, receiver_limits,
+                            resources, rfc5322_format, tenant_pause, tls_policy)
 
 # Implemented properties, in run order. The first of no_loss,
 # bounded_duplicates, idempotency, dns_mx and receiver_limits runs the real
 # campaign; the others reuse it. tls_policy and outbound_auth run their own
 # real runs after the campaign. rfc5322_format reads the messages of every
-# run before it. resources goes last: it reads the memory peak and the
+# run before it. debug_timeline and debug_aggregates run mtaq on the
+# campaign's engine.db. resources goes last: it reads the memory peak and the
 # duration of everything before it.
 PROPERTIES = {
     m.NAME: m for m in (profile_sources, classification, backoff_expiry, determinism, ip_warmup,
                         tenant_pause, destination_isolation, no_loss, bounded_duplicates, idempotency, dns_mx, receiver_limits,
-                        tls_policy, outbound_auth, rfc5322_format, resources)
+                        tls_policy, outbound_auth, rfc5322_format, debug_timeline, debug_aggregates,
+                        resources)
 }
 
 

@@ -68,6 +68,14 @@ class Context:
             raise RuntimeError(f"{' '.join(cmd)}: exit {res.returncode}: {res.stderr.strip()}")
         return res.stdout
 
+    def mtaq(self, *args):
+        """Run bin/mtaq (contract 4.2) and return its standard output."""
+        cmd = [os.path.join(self.bin, "mtaq"), *args]
+        res = subprocess.run(cmd, cwd=self.root, capture_output=True, text=True)
+        if res.returncode != 0:
+            raise RuntimeError(f"{' '.join(cmd)}: exit {res.returncode}: {res.stderr.strip()}")
+        return res.stdout
+
     def simulate(self, scenario, seed, out_dir, variant=None):
         """mtadst run of lab/scenarios/<scenario>.json, or of one of its variants,
         into an empty out_dir."""

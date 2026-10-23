@@ -90,6 +90,13 @@ CREATE TABLE IF NOT EXISTS events (
 );
 `
 
+// EventColumns are the columns of events in schema order (contract 3.3);
+// seq, at_ms, attempt and code are integers, the rest text. Read-only
+// tools like mtaq share only this and the schema with the engine.
+var EventColumns = []string{"seq", "at_ms", "msg_id", "tenant", "kind", "domain", "provider",
+	"mx_host", "src_ip", "attempt", "code", "enhanced", "text", "class", "subtype", "rule_id",
+	"msg_type", "detail"}
+
 // Message is one row of messages: one recipient per message (D13).
 type Message struct {
 	N             int64

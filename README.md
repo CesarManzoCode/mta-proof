@@ -51,9 +51,39 @@ Dentro, el verificador levanta `lo`, corre cada propiedad implementada, escribe 
 - `details` trae las cifras que respaldan el veredicto (claves en la sección 4.1 del contrato). Si la propiedad falla, `details.failures` lista los motivos.
 - `max_memory_bytes` es el `memory.peak` del scope de toda la corrida y `duration_s` su duración; la propiedad `resources` falla si la memoria supera `memory_limit_bytes`.
 
-Propiedades implementadas hoy, las diez de K1: `profile_sources`, `classification`, `backoff_expiry`, `determinism`, `no_loss`, `bounded_duplicates`, `idempotency`, `dns_mx`, `receiver_limits` (sobre el escenario simulado `limits` y sobre la corrida real) y `resources`. Qué decide cada una: sección 4 de [vault/CONTRACT.md](vault/CONTRACT.md).
+Propiedades implementadas hoy, las dieciocho de K1 y K2. De K1: `profile_sources`, `classification`, `backoff_expiry`, `determinism`, `no_loss`, `bounded_duplicates`, `idempotency`, `dns_mx`, `receiver_limits` (sobre el escenario simulado `limits` y sobre la corrida real) y `resources`. De K2: `ip_warmup`, `tenant_pause`, `destination_isolation`, `tls_policy`, `outbound_auth`, `rfc5322_format`, `debug_timeline` y `debug_aggregates`. Qué decide cada una: sección 4 de [vault/CONTRACT.md](vault/CONTRACT.md).
 
 La corrida real es una campaña de muertes forzadas (`lab/campaign.json`, contrato 3.12): dentro del espacio de nombres, el verificador arranca el simulador y el motor, manda 10 000 mensajes por HTTP con reenvíos idempotentes y conflictos, mata el motor 30 veces con `kill -9` (5 en la ventana entre el 250 del receptor y su registro), corta conexiones y cambia un perfil en caliente; tras cada muerte lo rearranca y al final espera a que drene. Deja todo en `out/runs/lab-1/campaign/`. Su duración medida está en «Resultados».
+
+### Depurar con `mtaq`
+
+`mtaq` lee el registro de eventos (`engine.db`) en solo lectura; sirve sobre cualquier corrida, también con el motor en marcha. Interfaz completa: sección 4.2 del contrato.
+
+```sh
+# Línea de tiempo causal de un mensaje: aceptación, cada intento con su ruta, IP,
+# conexión y TLS, la respuesta, su clasificación y el estado final, más sus eventos.
+bin/mtaq timeline --db out/runs/lab-1/campaign/engine.db --msg m00001230
+
+# Todos los mensajes rebotados desde una IP, uno por línea.
+bin/mtaq timeline --db out/runs/lab-1/campaign/engine.db --all --src-ip 127.0.2.1 --kind bounced
+
+# Diferimientos por proveedor.
+bin/mtaq agg --db out/runs/lab-1/campaign/engine.db --by provider,kind --kind deferred
+```
+
+En la corrida de K2, `m00001230` tiene dos intentos: el primero `interrupted` (el motor murió durante él y la recuperación lo cerró con `recovered`) y el segundo `delivered` con `250 2.0.0` en `mx1.baseline.test` desde `127.0.2.1`. La agregación devuelve un objeto por grupo:
+
+```json
+[
+{"count":17,"kind":"deferred","provider":null},
+{"count":261,"kind":"deferred","provider":"baseline"},
+{"count":3,"kind":"deferred","provider":"gmail-model"},
+{"count":1,"kind":"deferred","provider":"outlook-model"},
+{"count":2,"kind":"deferred","provider":"yahoo-model"}
+]
+```
+
+`provider` nulo es el grupo de los eventos sin proveedor: en esta corrida, los 17 diferimientos son de `fallback.test`, cuyo MX no coincide con los `mx_suffixes` de ningún proveedor de la configuración (14 `451 4.3.0` al final de DATA y 3 cierres silenciosos al `MAIL`).
 
 ## Estado
 
@@ -61,7 +91,7 @@ La corrida real es una campaña de muertes forzadas (`lab/campaign.json`, contra
 | --- | --- | --- |
 | K0 | Contrato, investigación y plan | hecho |
 | K1 | Simulador, motor, clasificación, backoff, DNS, determinismo, no pérdida bajo `kill -9` | Cerrada |
-| K2 | Pools y calentamiento, tenants, aislamiento, TLS, autenticación, depuración | pendiente |
+| K2 | Pools y calentamiento, tenants, aislamiento, TLS, autenticación, depuración | Implementada (los cinco mini sprints); cierre pendiente |
 | K3 | Mutantes, validación externa con Haraka, licencias | pendiente |
 
 ## Resultados
@@ -84,6 +114,24 @@ El registro del cierre anota el veredicto de cada criterio, no sus cifras. Las d
 | MX preferido caído (`fallback.test`) | 422 mensajes, todos entregados en el segundo MX |
 | Duración de la suite | 342,6 s (333,4 s de la campaña real, que va a 30 mensajes/s a propósito) |
 | Memoria máxima (`memory.peak` del scope) | 332 771 328 bytes de 8 589 934 592 permitidos |
+
+### Resultados de K2
+
+`make verify` del último mini sprint de K2 (k2-05), 2026-10-23, en la misma máquina, sobre `a9d1fe8` con el árbol de trabajo de k2-05 (el `git_head` del reporte): veredicto global `pass` en las dieciocho propiedades. Cifras de su `out/report.json`:
+
+| Medida | Valor |
+| --- | --- |
+| Campaña real | 10 000 aceptados, 30 `kill -9` (5 `post_250`), 0 perdidos, 7 duplicados todos con muerte en su ventana |
+| `ip_warmup` (escenario `warmup`) | 0 `data_end` por encima del tope diario u horario; estrangulamiento 0 en las IPs conocidas y 2 de 34 044 respuestas en la desconocida; diferencia máxima de reparto 0,00099 (tolerancia 0,05) |
+| `tenant_pause` (escenario `tenant-pause`) | `spamco` pausado 0 ms después de cada cruce (plazo 60 s), 2 400 s de pausa; los demás tenants entregan 2 787 mensajes en esas pausas, igual que en la corrida base (razón 1,0) |
+| `destination_isolation` (escenario `isolation`) | p50 y p99 de los otros destinos sin cambio (margen 1,10) con `gmail-model.test` estrangulado: su p99 pasa de 0 a 5 571 078 ms |
+| `tls_policy` | con certificado inválido el dominio `opportunistic` se entrega y el `required` se difiere `TLSPolicy`; con el válido, los dos se entregan por TLS |
+| `outbound_auth` | 10 de 10 mensajes de `auth-good.test` con SPF, DKIM y DMARC `pass`; 10 de 10 de `auth-broken.test` con un solo intento, `550 5.7.515` y `fail` en los tres |
+| `rfc5322_format` | 84 336 `.eml` capturados, 0 con defectos |
+| `debug_timeline` | 10 000 de 10 000 líneas de tiempo coinciden con el receptor: 10 183 intentos, los 10 166 `data_end` explicados con su código y en orden |
+| `debug_aggregates` | 15 consultas de `mtaq agg`, 411 grupos sobre 41 310 eventos, 0 diferencias con el `GROUP BY` del verificador |
+| Duración de la suite | 393,9 s |
+| Memoria máxima (`memory.peak` del scope) | 1 052 442 624 bytes de 8 589 934 592 permitidos |
 
 Son una semilla en una máquina: ver [LIMITATIONS.md](LIMITATIONS.md).
 
