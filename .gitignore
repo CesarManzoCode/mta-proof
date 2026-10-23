@@ -1,0 +1,7 @@
+/vault/private/
+/AGENTS.md
+/CLAUDE.md
+/.claude/
+/out/
+/bin/
+node_modules/
