@@ -74,10 +74,13 @@ Arch Linux, kernel 7.2.10, 12 CPU, 14 GiB visibles, disco `/home` SSD.
 | Diez corridas `mtadst run` por escenario (`determinism` y `backoff`, semilla 7) con `GOMAXPROCS` 1, 8 y 15, y tres de `limits` (semilla 3) con 5, 10 y 15 | un solo `trace.sha256` por escenario | 2.2, D05 |
 | `events.jsonl` de `determinism` contra `json.dumps(dict(fila), sort_keys=True, separators=(",", ":"))` de Python 3.14.8 sobre `engine.db` | idénticos byte a byte (también lo comprueba `TestEventsMatchPython`) | 3.6 |
 | `make verify` de k1-06 (seis propiedades: `profile_sources`, `classification`, `backoff_expiry`, `receiver_limits`, `determinism`, `resources`), 2026-10-23, kernel 7.2.11 | todas `pass`; `memory.peak` del scope 215 048 192 bytes; 7,1 s. Dentro de `unshare --net`, `/sys/class/net` lista las interfaces del anfitrión (`docker0`, `enp5s0`, `lo`), así que `lo` se sube con `ioctl` | 4, D17 |
+| Campaña real de k1-07 (semilla 1, `lab/campaign.json`) sin la reconstrucción de límites aprendidos, 2026-10-23, kernel 7.2.11 | 10 000 aceptados, 30 muertes (5 `post_250`), 0 perdidos; 7 violaciones de `yahoo.max_msgs_per_conn`, cada una entre 13 y 21 s después de un reinicio; la de t+311 s contó. Un duplicado con el 250 del receptor 1 ms después de la muerte del motor | 2.6, 4 |
+| Corrida de prueba de 2 000 mensajes a ritmo libre con 6 cortes | carga en 2,5 s (~800 ingresos/s con 8 clientes); 3 cortes cayeron durante el `fsync` del `data_end` y dejaron un mensaje aceptado sin 250 (duplicado tras `engine.no_reply`) | 3.12, 4 |
+| `make verify` de k1-07 (diez propiedades), 2026-10-23, kernel 7.2.11 | todas `pass`; 342,6 s en total, de ellos 333,4 s de la campaña real (carga a 30 mensajes/s y drenaje de 0,03 s); `memory.peak` del scope 332 771 328 bytes; rearranque más lento del motor 46 ms; 8 duplicados, todos con muerte en su ventana; una sola violación (no contada) en la corrida real | 4, 5, D17 |
 
 ## Huecos que siguen abiertos
 
 - Directrices oficiales de Gmail: sin fuente primaria. Afecta a `gmail-model`.
 - `550 5.7.509` y los textos de Yahoo: solo fuentes secundarias.
 - Cifras de límites de cualquier proveedor: no publicadas (R-YAHOO, R-RESEND-FORGE). Toda cifra de perfil es supuesto.
-- Rendimiento del motor en esta máquina: no medible antes de que exista; lo mide K1 y ajusta los parámetros de la sección 5 del contrato.
+- Rendimiento del motor en esta máquina: K1 midió solo lo que la campaña necesita (ingreso ~800/s con 8 clientes en una corrida de 2 000 mensajes); ningún parámetro de la sección 5 tuvo que subir. No hay medición de caudal máximo de entrega.

@@ -82,6 +82,9 @@ func NewCore(snap *store.Snapshot, clk clock.Clock, rng *rand.Rand) *Core {
 	for _, p := range snap.Suppressions {
 		c.s.supp[suppKey{p.Tenant, p.Address}] = p
 	}
+	for _, d := range snap.Learned {
+		c.restoreLearned(d)
+	}
 	c.recover(snap.Messages)
 	for _, m := range snap.Messages {
 		if m.State == store.StateQueued {

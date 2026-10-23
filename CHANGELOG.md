@@ -21,6 +21,10 @@
 - Verificador `python3 -m verifier verify --out out [--only ...]` (Python, solo biblioteca estándar, sin código del motor): lectores de `receiver.jsonl`, `engine.db` en solo lectura, `harness.jsonl` y `.eml`, reporte `out/report.json` y las propiedades `classification`, `backoff_expiry`, `receiver_limits` (modo simulado), `determinism`, `profile_sources` y `resources`.
 - `make build` (binarios en `bin/`) y `make verify`, el comando único: scope de systemd de usuario y espacio de nombres de usuario, red y montaje, donde el verificador levanta `lo`.
 - `lab/params.json` con los parámetros de la sección 5 del contrato.
+- Laboratorio real y campaña de muertes forzadas (K1): orquestador en `verifier/lab.py` y `verifier/campaign.py` que, dentro del espacio de nombres, monta su `resolv.conf`, arranca `mtasim serve` y `mtaengine run`, genera 10 000 mensajes sembrados por HTTP con reenvíos idempotentes y conflictos, mata el motor 30 veces con `kill -9` (5 con el protocolo `post_250`: retención del 250, `SIGSTOP`, liberación, `SIGKILL`), corta conexiones, cambia un perfil en caliente, rearranca el motor y espera a que drene. Escribe `harness.jsonl`, `ingest.jsonl` y el resumen `campaign.json` en `out/runs/lab-1/campaign/`.
+- Definición de la campaña en `lab/campaign.json` (contrato 3.12).
+- Propiedades `no_loss`, `bounded_duplicates`, `idempotency` y `dns_mx` sobre la corrida real; `receiver_limits` decide ahora sobre el escenario simulado `limits` y sobre la corrida real. Con ellas, el reporte trae las diez propiedades de K1.
+- Zona de laboratorio: `fallback.test`, cuyo MX preferido no escucha.
 
 ### Decisiones
 
@@ -42,4 +46,8 @@
 - En modo simulado el almacén usa `synchronous=OFF` (cambia D03 solo para `mtadst`): no muere ningún proceso, así que la durabilidad no cambia ninguna salida. Medido: el escenario `limits` baja de 54,8 s a 5,0 s con el mismo `trace.sha256`.
 - `backoff_expiry` exige además que cada intervalo entre intentos sea al menos la espera del calendario de `lab/params.json` para ese reintento. Sin esa condición, reintentar con un intervalo constante mínimo (el mutante `mut_no_backoff`) cumpliría «no decreciente y ≤ máximo» y la propiedad no lo detectaría.
 - El verificador recalcula `trace.sha256` desde `receiver.jsonl` y `engine.db` en vez de leer el que escribe el motor, y falla si no coinciden.
+- El motor reconstruye al arrancar los límites aprendidos desde los eventos `deferred` y `expired` que los registraron (contrato 2.6). Medido en la campaña real: con los límites solo en memoria, el motor volvía a violar el límite de mensajes por conexión de `yahoo-model` entre 13 y 21 s después de cada reinicio, y una de esas violaciones, pasado el periodo de adaptación, contó.
+- `bounded_duplicates` acepta un duplicado si hay una falla inyectada en su ventana, con la ventana corregida (contrato 4): una muerte desde el `MAIL` de la transacción del primer 2xx (no desde el 2xx) hasta su `delivered`, o un corte del socket de control que terminó esa conexión justo después del 2xx. Medido: el receptor puede aceptar después de que el emisor murió (muerte en …223000 ms, 250 en …223001 ms) y un corte durante el `fsync` del `data_end` deja aceptado un mensaje cuyo 250 no sale (tres de seis cortes en una corrida de 2 000 mensajes). Ambos son el duplicado inevitable de RFC 5321 §6.1; sigue sin admitirse ninguno sin falla inyectada.
+- `no_loss` cruza además cada 202 de la API (registrado por el orquestador en `ingest.jsonl`) con los eventos `accepted`: sin esa fuente, un 202 sin commit no dejaría rastro en `engine.db`.
+- La campaña real va a 30 mensajes por segundo (supuesto) para que la carga dure más que el periodo de adaptación de 300 s de los perfiles y una violación en la corrida real pueda contar.
 - `events.jsonl` usa los escapes de `json.dumps` de Python (`ensure_ascii`), para que el verificador lo reconstruya desde `engine.db` con la biblioteca estándar y compare bytes.

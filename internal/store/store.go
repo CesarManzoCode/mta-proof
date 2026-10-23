@@ -338,6 +338,10 @@ type Snapshot struct {
 	Messages     []*Message     // ordered by n
 	Keys         []*Key         // ordered by key
 	Suppressions []*Suppression // ordered by (tenant, address)
+	// Learned is the detail of every deferred or expired event that
+	// recorded a learned limit, in seq order: the core rebuilds its
+	// learned limits from them, so a restart does not forget them.
+	Learned []string
 }
 
 // Load reads the whole live state. Messages come back in msg_id sequence
@@ -384,13 +388,30 @@ func (s *Store) Load() (*Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	for rows.Next() {
 		p := &Suppression{}
 		if err := rows.Scan(&p.Tenant, &p.Address, &p.MsgID, &p.Subtype, &p.CreatedAtMs); err != nil {
+			rows.Close()
 			return nil, err
 		}
 		snap.Suppressions = append(snap.Suppressions, p)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows, err = s.db.Query(`SELECT detail FROM events WHERE kind IN ('deferred', 'expired')
+		AND detail LIKE '%"learned":%' ORDER BY seq`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var d string
+		if err := rows.Scan(&d); err != nil {
+			return nil, err
+		}
+		snap.Learned = append(snap.Learned, d)
 	}
 	return snap, rows.Err()
 }

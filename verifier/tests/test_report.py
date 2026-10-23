@@ -33,7 +33,7 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(cli.select("resources,classification"), ["classification", "resources"])
         self.assertEqual(cli.select(None), list(cli.PROPERTIES))
         with self.assertRaises(SystemExit):
-            cli.select("no_loss")
+            cli.select("ip_warmup")
 
 
 class ParamsTest(unittest.TestCase):

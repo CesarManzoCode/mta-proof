@@ -14,6 +14,7 @@ PARAMS_KEYS = (
     "warmup_plan", "warmup_share_tolerance", "memory_limit_bytes",
 )
 POLICY_KEYS = ("initial_s", "factor", "max_s", "lifetime_s")
+CAMPAIGN_SEED = 1
 
 
 def load_params(path):
@@ -39,6 +40,7 @@ class Context:
         self.params = params if params is not None else load_params(
             os.path.join(self.root, "lab", "params.json"))
         self.started = time.monotonic()
+        self._campaign = None
 
     def path(self, *parts):
         return os.path.join(self.root, *parts)
@@ -75,3 +77,21 @@ class Context:
                     "--seed", str(seed), "--out", out_dir, "--root", self.root,
                     "--research", os.path.join("vault", "RESEARCH.md"))
         return out_dir
+
+    def lab_dir(self, seed):
+        """out/runs/lab-<seed>: the runs receiver_limits decides on, simulated and real."""
+        return self.run_dir(f"lab-{seed}")
+
+    def campaign(self, seed=CAMPAIGN_SEED):
+        """The real kill campaign (3.12) in out/runs/lab-<seed>/campaign, run once per
+        verify and shared by the properties that decide on it."""
+        if self._campaign is None:
+            from verifier import campaign  # the lab needs the namespace; load it on use
+
+            run_dir = os.path.join(self.lab_dir(seed), "campaign")
+            if os.path.lexists(run_dir):
+                shutil.rmtree(run_dir)
+            os.makedirs(run_dir)
+            self._campaign = {"seed": seed, "dir": run_dir,
+                              "summary": campaign.run(self, seed, run_dir)}
+        return self._campaign

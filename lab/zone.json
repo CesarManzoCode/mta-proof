@@ -18,6 +18,11 @@
     {"name": "always-defer.test", "type": "MX", "pref": 10, "host": "mx1.always-defer.test"},
     {"name": "mx1.always-defer.test", "type": "A", "addr": "127.0.1.6"},
 
-    {"name": "nullmx.test", "type": "MX", "pref": 0, "host": "."}
+    {"name": "nullmx.test", "type": "MX", "pref": 0, "host": "."},
+
+    {"name": "fallback.test", "type": "MX", "pref": 10, "host": "mx1.fallback.test"},
+    {"name": "fallback.test", "type": "MX", "pref": 20, "host": "mx2.fallback.test"},
+    {"name": "mx1.fallback.test", "type": "A", "addr": "127.0.1.7"},
+    {"name": "mx2.fallback.test", "type": "A", "addr": "127.0.1.5"}
   ]
 }

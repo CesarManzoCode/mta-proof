@@ -8,14 +8,17 @@ import time
 import traceback
 
 from verifier import context, netns, report
-from verifier.props import (backoff_expiry, classification, determinism, profile_sources,
-                            receiver_limits, resources)
+from verifier.props import (backoff_expiry, bounded_duplicates, classification, determinism,
+                            dns_mx, idempotency, no_loss, profile_sources, receiver_limits,
+                            resources)
 
-# Implemented properties, in run order. resources goes last: it reads the
-# memory peak and the duration of everything before it.
+# Implemented properties, in run order. The first of no_loss,
+# bounded_duplicates, idempotency, dns_mx and receiver_limits runs the real
+# campaign; the others reuse it. resources goes last: it reads the memory
+# peak and the duration of everything before it.
 PROPERTIES = {
-    m.NAME: m for m in (profile_sources, classification, backoff_expiry, receiver_limits,
-                        determinism, resources)
+    m.NAME: m for m in (profile_sources, classification, backoff_expiry, determinism, no_loss,
+                        bounded_duplicates, idempotency, dns_mx, receiver_limits, resources)
 }
 
 

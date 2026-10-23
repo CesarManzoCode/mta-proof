@@ -4,6 +4,7 @@ import (
 	"container/heap"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"math/rand/v2"
 	"net/netip"
 	"sort"
@@ -856,6 +857,36 @@ func (c *Core) learnThrottle(cs *connState) map[string]any {
 	}
 	return map[string]any{"key": cs.lkey, "rate_limit": l.rate, "rate_per_s": c.s.cfg.Adapt.RateWindowS,
 		"connections": l.conns}
+}
+
+// restoreLearned applies the learned limits recorded in the detail of a
+// deferred or expired event, keeping the lowest value of each, as learning
+// does. Start-up calls it for every such event in seq order, so a restart
+// keeps what the engine learned before it.
+func (c *Core) restoreLearned(detail string) {
+	var d struct {
+		Learned *struct {
+			Key         string  `json:"key"`
+			MsgsPerConn int     `json:"msgs_per_conn"`
+			RateLimit   int     `json:"rate_limit"`
+			RatePerS    float64 `json:"rate_per_s"`
+			Connections int     `json:"connections"`
+		} `json:"learned"`
+	}
+	if json.Unmarshal([]byte(detail), &d) != nil || d.Learned == nil || d.Learned.Key == "" {
+		return
+	}
+	in := d.Learned
+	l := c.learnedFor(in.Key)
+	if n := in.MsgsPerConn; n > 0 && (l.msgs == 0 || n < l.msgs) {
+		l.msgs = n
+	}
+	if n := in.RateLimit; n > 0 && in.RatePerS > 0 && (l.rate == 0 || n < l.rate) {
+		l.rate, l.perMs = n, secondsMs(in.RatePerS)
+	}
+	if n := in.Connections; n > 0 && (l.conns == 0 || n < l.conns) {
+		l.conns = n
+	}
 }
 
 func (c *Core) learnedFor(lk string) *learnedLimits {

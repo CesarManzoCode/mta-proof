@@ -51,20 +51,36 @@ Dentro, el verificador levanta `lo`, corre cada propiedad implementada, escribe 
 - `details` trae las cifras que respaldan el veredicto (claves en la sección 4.1 del contrato). Si la propiedad falla, `details.failures` lista los motivos.
 - `max_memory_bytes` es el `memory.peak` del scope de toda la corrida y `duration_s` su duración; la propiedad `resources` falla si la memoria supera `memory_limit_bytes`.
 
-Propiedades implementadas hoy: `profile_sources`, `classification`, `backoff_expiry`, `receiver_limits` (en modo simulado), `determinism` y `resources`. Qué decide cada una: sección 4 de [vault/CONTRACT.md](vault/CONTRACT.md).
+Propiedades implementadas hoy, las diez de K1: `profile_sources`, `classification`, `backoff_expiry`, `determinism`, `no_loss`, `bounded_duplicates`, `idempotency`, `dns_mx`, `receiver_limits` (sobre el escenario simulado `limits` y sobre la corrida real) y `resources`. Qué decide cada una: sección 4 de [vault/CONTRACT.md](vault/CONTRACT.md).
+
+La corrida real es una campaña de muertes forzadas (`lab/campaign.json`, contrato 3.12): dentro del espacio de nombres, el verificador arranca el simulador y el motor, manda 10 000 mensajes por HTTP con reenvíos idempotentes y conflictos, mata el motor 30 veces con `kill -9` (5 en la ventana entre el 250 del receptor y su registro), corta conexiones y cambia un perfil en caliente; tras cada muerte lo rearranca y al final espera a que drene. Deja todo en `out/runs/lab-1/campaign/`. Dura unos 6 minutos.
 
 ## Estado
 
 | Fase | Contenido | Estado |
 | --- | --- | --- |
 | K0 | Contrato, investigación y plan | hecho |
-| K1 | Simulador, motor, clasificación, backoff, DNS, determinismo, no pérdida bajo `kill -9` | en curso |
+| K1 | Simulador, motor, clasificación, backoff, DNS, determinismo, no pérdida bajo `kill -9` | hecho |
 | K2 | Pools y calentamiento, tenants, aislamiento, TLS, autenticación, depuración | pendiente |
 | K3 | Mutantes, validación externa con Haraka, licencias | pendiente |
 
 ## Resultados
 
-Todavía no hay resultados: se publican aquí al cerrar cada fase.
+Cifras de `out/report.json` de `make verify` en la máquina de desarrollo (Arch Linux, kernel 7.2.11, 12 CPU, 14 GiB, disco SSD), 2026-10-23, al cerrar K1. Veredicto global `pass` en las diez propiedades.
+
+| Medida | Valor |
+| --- | --- |
+| Mensajes aceptados en la corrida real | 10 000 (más 100 reenvíos iguales y 50 conflictos rechazados con 409) |
+| `kill -9` del motor | 30, de ellos 5 en la ventana `post_250` |
+| Pérdidas (`lost`) | 0 |
+| Duplicados en el receptor | 8, todos con una muerte en su ventana (0 fuera de ventana) |
+| Violaciones contadas de los límites del receptor | 0 (simulada y real) |
+| Null MX (`nullmx.test`) | 113 mensajes, todos `bounced`/`NullMX`, sin conexión |
+| MX preferido caído (`fallback.test`) | 422 mensajes, todos entregados en el segundo MX |
+| Duración de la suite | 342,6 s (333,4 s de la campaña real, que va a 30 mensajes/s a propósito) |
+| Memoria máxima (`memory.peak` del scope) | 332 771 328 bytes (≈317 MiB) de 8 GiB permitidos |
+
+Son una semilla en una máquina: ver [LIMITATIONS.md](LIMITATIONS.md).
 
 ## Documentos
 

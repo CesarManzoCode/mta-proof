@@ -2,7 +2,12 @@
 
 Only the receiver log decides: a violation is what the simulator wrote as a
 `violation` line with `counted: true` (after the profile's adaptation period).
+Two runs: the simulated `limits` scenario, which drives the engine above the
+profiles' rates, and the real kill campaign, where every restart starts the
+engine again.
 """
+
+import os
 
 from verifier import formats, report
 
@@ -44,6 +49,20 @@ def check(receiver):
 
 
 def run(ctx):
-    run_dir = ctx.simulate(SCENARIO, SEED, ctx.run_dir(f"{SCENARIO}-{SEED}"))
-    ok, details, failures = check(formats.read_receiver(run_dir))
-    return report.result(NAME, ok, details, seed=SEED, trace=ctx.rel(run_dir), failures=failures)
+    """Decided on the simulated limits scenario and on the real campaign, both
+    under out/runs/lab-<seed>/ (4.1: one subdirectory per run)."""
+    c = ctx.campaign(SEED)
+    base = ctx.lab_dir(SEED)
+    sim_dir = ctx.simulate(SCENARIO, SEED, os.path.join(base, SCENARIO))
+    runs = {"simulated": sim_dir, "real": c["dir"]}
+    ok, details, failures = True, {"violations": {}, "runs": {}}, []
+    for label, d in runs.items():
+        r_ok, r_details, r_failures = check(formats.read_receiver(d))
+        ok = ok and r_ok
+        failures += [f"{label}: {f}" for f in r_failures]
+        for prof, ips in r_details["violations"].items():
+            for ip, n in ips.items():
+                per = details["violations"].setdefault(prof, {})
+                per[ip] = per.get(ip, 0) + n
+        details["runs"][label] = dict(r_details, trace=ctx.rel(d))
+    return report.result(NAME, ok, details, seed=SEED, trace=ctx.rel(base), failures=failures)

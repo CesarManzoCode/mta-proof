@@ -364,3 +364,32 @@ func TestValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A restart keeps the learned limits: start-up rebuilds them from the
+// deferred and expired events that recorded them, keeping the lowest.
+func TestRestartKeepsLearnedLimits(t *testing.T) {
+	e := newSim(t)
+	ev := func(kind, d string) store.Write {
+		return store.Write{Event: &store.Event{Kind: kind, MsgID: "m00000001", Detail: d}}
+	}
+	if err := e.st.Apply([]store.Write{
+		ev(KindDeferred, `{"learned":{"key":"yahoo-model/127.0.2.1","msgs_per_conn":20}}`),
+		ev(KindDeferred, `{"learned":{"key":"yahoo-model/127.0.2.1","msgs_per_conn":12}}`),
+		ev(KindDeferred, `{"learned":{"key":"yahoo-model/127.0.2.1","msgs_per_conn":15}}`),
+		ev(KindExpired, `{"learned":{"connections":2,"key":"gmail-model/127.0.2.1","rate_limit":40,"rate_per_s":60}}`),
+		ev(KindDeferred, `{"conn":3,"stage":"mail"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	e.reopen()
+	got := e.core.s.learned
+	if y := got["yahoo-model/127.0.2.1"]; y == nil || y.msgs != 12 {
+		t.Fatalf("yahoo learned %+v, want msgs_per_conn 12", y)
+	}
+	if g := got["gmail-model/127.0.2.1"]; g == nil || g.rate != 40 || g.perMs != 60000 || g.conns != 2 {
+		t.Fatalf("gmail learned %+v", g)
+	}
+	if len(got) != 2 {
+		t.Fatalf("learned %d keys, want 2", len(got))
+	}
+}
