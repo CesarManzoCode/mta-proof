@@ -1,0 +1,9 @@
+{
+  "name": "mta-proof-external-haraka",
+  "private": true,
+  "description": "Unmodified Haraka for mta-proof's external validation (contract D08)",
+  "license": "MIT",
+  "dependencies": {
+    "Haraka": "3.3.5"
+  }
+}

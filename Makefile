@@ -1,7 +1,13 @@
-.PHONY: build check verify
+.PHONY: deps build check verify
 
 # Mutantes del contrato 4.3: una etiqueta de compilación cada uno.
 MUTANTS := mut_no_backoff mut_retry_permanent mut_ignore_conn_limit mut_ack_before_persist mut_shared_queue mut_exceed_warmup
+
+# deps: lo único que usa la red, una vez: módulos Go y Haraka fijado por su
+# package-lock.json (D08). npm ci no ejecuta scripts de instalación no aprobados.
+deps:
+	go mod download
+	cd external/haraka && npm ci
 
 # build: binarios de cmd/ en bin/ y, por mutante, los mismos con su etiqueta en
 # bin/mut/<nombre>/, para que el verificador corra la suite con --bin bin/mut/<nombre>.

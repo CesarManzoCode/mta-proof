@@ -1,0 +1,3 @@
+# mta-proof (D08): relay from the ACL; with relaying on, Haraka queues to its
+# own outbound delivery.
+relay

@@ -30,8 +30,9 @@ def defects_of(data):
 
 
 # out/runs/mutation holds the inner suites of mutation_detection, each with
-# its own rfc5322_format; their captures are not this run's.
-SKIP = ("mutation",)
+# its own rfc5322_format; their captures are not this run's. out/runs/external-1
+# holds what Haraka relayed in external_validation: not the engine's messages.
+SKIP = ("mutation", "external-1")
 
 
 def captured(runs_dir):
