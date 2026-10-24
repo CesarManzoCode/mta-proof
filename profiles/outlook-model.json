@@ -1,0 +1,19 @@
+{
+  "name": "outlook-model",
+  "sources": ["R-MS-515", "R-MS-509"],
+  "limitations": "El texto 550 5.7.509 proviene de fuentes secundarias (R-MS-509). Microsoft no publica límites de conexiones: el de concurrencia es supuesto y sin respuesta documentada, por eso cierra en silencio. La regla auth solo se aplica en modo real: en mtadst el motor no firma y el receptor no verifica.",
+  "adaptation_period_s": 300,
+  "hosts": ["mx1.outlook-model.test"],
+  "rules": [
+    {"id": "outlook.auth", "kind": "auth",
+     "params": {"require": ["spf", "dkim", "dmarc"],
+                "fail_response": {"code": 550, "enhanced": "5.7.515", "text": "Access denied, sending domain <domain> does not meet the required authentication level."},
+                "dmarc_reject_response": {"code": 550, "enhanced": "5.7.509", "text": "Access denied, sending domain <domain> does not pass DMARC verification and has a DMARC policy of reject."}},
+     "source": "R-MS-515", "assumption": false,
+     "note": "R-MS-515: SPF y DKIM deben pasar y DMARC alinear con al menos uno; el umbral de 5 000 mensajes diarios no se modela. 5.7.509 es de fuente secundaria"},
+    {"id": "outlook.concurrency", "kind": "concurrency", "params": {"limit": 10},
+     "on_violation": {"action": "close_silent"},
+     "assumption": true,
+     "note": "Sin fuente: límite y cierre silencioso son supuestos del proyecto"}
+  ]
+}

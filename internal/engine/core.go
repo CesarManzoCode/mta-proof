@@ -1,0 +1,366 @@
+// Package engine is the outbound delivery engine. Core is the single-threaded
+// state machine of contract 2.2; the executors own it and persist what it
+// produces.
+package engine
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math/rand/v2"
+	"net/netip"
+	"sort"
+	"time"
+
+	"github.com/CesarManzoCode/mta-proof/internal/classify"
+	"github.com/CesarManzoCode/mta-proof/internal/clock"
+	"github.com/CesarManzoCode/mta-proof/internal/store"
+)
+
+// Event kinds (contract 3.3).
+const (
+	KindAccepted            = "accepted"
+	KindIdempotentReplay    = "idempotent_replay"
+	KindIdempotencyConflict = "idempotency_conflict"
+	KindRouted              = "routed"
+	KindAttemptStarted      = "attempt_started"
+	KindResponse            = "response"
+	KindClassified          = "classified"
+	KindDeferred            = "deferred"
+	KindDelivered           = "delivered"
+	KindBounced             = "bounced"
+	KindExpired             = "expired"
+	KindSuppressed          = "suppressed"
+	KindDSNEnqueued         = "dsn_enqueued"
+	KindTenantPaused        = "tenant_paused"
+	KindTenantResumed       = "tenant_resumed"
+	KindTLSNegotiated       = "tls_negotiated"
+	KindRecovered           = "recovered"
+)
+
+// Idempotency parameters [R-RESEND-IDEMP].
+const (
+	MaxIdempotencyKey = 256
+	IdempotencyWindow = 24 * time.Hour
+)
+
+// ErrNotFound and ErrBadState are returned by attempt transitions.
+var (
+	ErrNotFound = errors.New("engine: unknown message")
+	ErrBadState = errors.New("engine: transition not allowed in this state")
+)
+
+// Core is the engine state machine. It is not safe for concurrent use: one
+// executor goroutine calls it. It reads time only from the injected Clock
+// and randomness only from the injected generator, and every change it makes
+// is appended to an ordered list of writes that the executor commits with
+// TakeWrites and store.Apply before acknowledging anything.
+type Core struct {
+	clk    clock.Clock
+	rng    *rand.Rand
+	msgs   map[string]*store.Message
+	keys   map[string]*store.Key
+	lastN  int64
+	writes []store.Write
+	s      *sched
+	// tenantLog waits for SetDelivery, which knows the bounce window, to
+	// rebuild the tenant monitors.
+	tenantLog []store.TenantEvent
+	// signer adds the DKIM-Signature at ingest, so every attempt sends the
+	// same bytes; nil signs nothing.
+	signer *Signer
+}
+
+// SetSigner makes Ingest sign the messages of the signer's domains.
+func (c *Core) SetSigner(s *Signer) { c.signer = s }
+
+// NewCore rebuilds the core from a snapshot and runs start-up recovery:
+// every attempt that was started and has no recorded result goes back to
+// the queue with a recovered event. Call TakeWrites and commit them before
+// serving requests.
+func NewCore(snap *store.Snapshot, clk clock.Clock, rng *rand.Rand) *Core {
+	c := &Core{clk: clk, rng: rng, msgs: map[string]*store.Message{}, keys: map[string]*store.Key{}, s: newSched()}
+	for _, m := range snap.Messages {
+		c.msgs[m.ID] = m
+		if m.N > c.lastN {
+			c.lastN = m.N
+		}
+	}
+	for _, k := range snap.Keys {
+		c.keys[k.Key] = k
+	}
+	for _, p := range snap.Suppressions {
+		c.s.supp[suppKey{p.Tenant, p.Address}] = p
+	}
+	for _, d := range snap.Learned {
+		c.restoreLearned(d)
+	}
+	c.restoreUse(snap.Attempts)
+	c.tenantLog = snap.Tenant
+	c.recover(snap.Messages)
+	for _, m := range snap.Messages {
+		if m.State == store.StateQueued {
+			c.enqueue(m)
+		}
+	}
+	return c
+}
+
+// restoreUse replays the attempt starts and results of the recent events,
+// in seq order, so a restart keeps the warm-up use of each source address.
+// Attempts still in flight are recovered as queued and charge nothing more.
+func (c *Core) restoreUse(attempts []store.AttemptEvent) {
+	for _, a := range attempts {
+		src, err := netip.ParseAddr(a.SrcIP)
+		if err != nil {
+			continue
+		}
+		if a.Kind == KindAttemptStarted {
+			c.chargeStart(a.MsgID, src, a.AtMs)
+		} else {
+			c.chargeEnd(a.MsgID, src, a.AtMs)
+		}
+	}
+	clear(c.s.inflight)
+}
+
+func (c *Core) nowMs() int64 { return clock.Ms(c.clk.Now()) }
+
+// msgIDFor is the msg_id of sequence number n (D15).
+func msgIDFor(n int64) string { return fmt.Sprintf("m%08d", n) }
+
+func (c *Core) recover(ordered []*store.Message) {
+	now := c.nowMs()
+	for _, m := range ordered { // snapshot order is msg_id sequence order
+		if m.State != store.StateInflight {
+			continue
+		}
+		m.State, m.NextAtMs, m.UpdatedAtMs = store.StateQueued, now, now
+		c.update(m)
+		c.event(&store.Event{Kind: KindRecovered, Attempt: m.Attempts,
+			Detail: detail(map[string]any{"from_state": store.StateInflight})}, m)
+	}
+}
+
+// TakeWrites returns the writes produced since the last call, in order.
+func (c *Core) TakeWrites() []store.Write {
+	w := c.writes
+	c.writes = nil
+	return w
+}
+
+// Message returns the message with msg_id id, or nil. The caller must not
+// modify it.
+func (c *Core) Message(id string) *store.Message { return c.msgs[id] }
+
+// IngestResult is the outcome of one ingest request.
+type IngestResult struct {
+	Status int    // 202 or 409
+	MsgID  string // the new or replayed message; for 409, the key's message
+	Replay bool
+}
+
+// Ingest admits a validated submission. With an idempotency key seen less
+// than IdempotencyWindow ago, the same payload replays the original msg_id
+// and another payload is a conflict; an older key is forgotten and the
+// request creates a new message.
+func (c *Core) Ingest(s *Submission, key string) IngestResult {
+	now := c.nowMs()
+	sum := s.PayloadSHA256()
+	ev := &store.Event{Tenant: s.Tenant, Domain: domainOf(s.To), MsgType: s.MsgType}
+	if key != "" {
+		if k := c.keys[key]; k != nil && now-k.CreatedAtMs < IdempotencyWindow.Milliseconds() {
+			ev.MsgID = k.MsgID
+			ev.Detail = detail(map[string]any{"idempotency_key": key, "payload_sha256": sum})
+			if k.PayloadSHA256 == sum {
+				ev.Kind = KindIdempotentReplay
+				c.writeEvent(ev, now)
+				return IngestResult{Status: 202, MsgID: k.MsgID, Replay: true}
+			}
+			ev.Kind = KindIdempotencyConflict
+			c.writeEvent(ev, now)
+			return IngestResult{Status: 409, MsgID: k.MsgID}
+		}
+	}
+	c.lastN++
+	id := msgIDFor(c.lastN)
+	raw := BuildMessage(id, s, c.clk.Now())
+	if c.signer != nil {
+		// A loaded RSA key does not fail to sign; if it ever did, the
+		// message goes unsigned and the receiver's dkim result shows it.
+		if signed, err := c.signer.Sign(s.From, raw); err == nil {
+			raw = signed
+		}
+	}
+	m := &store.Message{
+		N: c.lastN, ID: id, Tenant: s.Tenant, From: s.From, To: s.To, Domain: domainOf(s.To),
+		MsgType: s.MsgType, PayloadSHA256: sum, Raw: raw,
+		State: store.StateQueued, NextAtMs: now, AcceptedAtMs: now, UpdatedAtMs: now,
+	}
+	c.msgs[id] = m
+	c.enqueue(m)
+	ins := *m
+	c.writes = append(c.writes, store.Write{InsertMessage: &ins})
+	d := map[string]any{"payload_sha256": sum}
+	if key != "" {
+		k := &store.Key{Key: key, PayloadSHA256: sum, MsgID: id, CreatedAtMs: now}
+		c.keys[key] = k
+		c.writes = append(c.writes, store.Write{PutKey: k})
+		d["idempotency_key"] = key
+	}
+	ev.Kind, ev.MsgID, ev.Detail = KindAccepted, id, detail(d)
+	c.writeEvent(ev, now)
+	return IngestResult{Status: 202, MsgID: id}
+}
+
+// Due returns up to limit queued messages whose next attempt time has
+// come, ordered by (next_at_ms, msg_id sequence).
+func (c *Core) Due(limit int) []*store.Message {
+	now := c.nowMs()
+	var due []*store.Message
+	for _, m := range c.msgs {
+		if m.State == store.StateQueued && m.NextAtMs <= now {
+			due = append(due, m)
+		}
+	}
+	sort.Slice(due, func(i, j int) bool {
+		if due[i].NextAtMs != due[j].NextAtMs {
+			return due[i].NextAtMs < due[j].NextAtMs
+		}
+		return due[i].N < due[j].N
+	})
+	if limit > 0 && len(due) > limit {
+		due = due[:limit]
+	}
+	return due
+}
+
+// Route is where an attempt goes; its fields fill the route columns of the
+// attempt's events.
+type Route struct {
+	Provider string
+	MXHost   string
+	SrcIP    string
+}
+
+// StartAttempt moves a queued message to inflight and records
+// attempt_started. The executor must commit this before it opens the SMTP
+// transaction, so a crash leaves a trace that recovery can find. It returns
+// the attempt number, from 1.
+func (c *Core) StartAttempt(id string, r Route) (int, error) {
+	m := c.msgs[id]
+	if m == nil {
+		return 0, ErrNotFound
+	}
+	if m.State != store.StateQueued {
+		return 0, ErrBadState
+	}
+	now := c.nowMs()
+	m.Attempts++
+	m.State, m.UpdatedAtMs = store.StateInflight, now
+	c.update(m)
+	c.event(&store.Event{Kind: KindAttemptStarted, Provider: r.Provider, MXHost: r.MXHost,
+		SrcIP: r.SrcIP, Attempt: m.Attempts}, m)
+	return m.Attempts, nil
+}
+
+// Classify classifies the receiver's reply to the current attempt of an
+// inflight message with the rule table of contract 3.8, records a
+// classified event with the reply, class, subtype and rule_id, and returns
+// the decision. A reply without a rule is undetermined (D14).
+func (c *Core) Classify(id string, r Route, code int, enhanced, text string) (classify.Decision, error) {
+	m := c.msgs[id]
+	if m == nil {
+		return classify.Decision{}, ErrNotFound
+	}
+	if m.State != store.StateInflight {
+		return classify.Decision{}, ErrBadState
+	}
+	d := classify.Classify(classify.Reply{Provider: r.Provider, Code: code, Enhanced: enhanced, Text: text})
+	c.event(&store.Event{Kind: KindClassified, Provider: r.Provider, MXHost: r.MXHost, SrcIP: r.SrcIP,
+		Attempt: m.Attempts, Code: code, Enhanced: enhanced, Text: text,
+		Class: d.Class, Subtype: d.Subtype, RuleID: d.RuleID}, m)
+	return d, nil
+}
+
+// Outcome is the recorded result of an inflight attempt.
+type Outcome struct {
+	Kind     string // KindDelivered, KindDeferred, KindBounced or KindExpired
+	Route    Route
+	Code     int
+	Enhanced string
+	Text     string
+	Class    string
+	Subtype  string
+	RuleID   string
+	NextAtMs int64 // KindDeferred only: when the message is due again
+	Detail   map[string]any
+}
+
+// FinishAttempt records the result of the current attempt of an inflight
+// message. Response parsing and backoff decide the Outcome elsewhere, from
+// the decision of Classify; the core only applies it.
+func (c *Core) FinishAttempt(id string, o Outcome) error {
+	m := c.msgs[id]
+	if m == nil {
+		return ErrNotFound
+	}
+	if m.State != store.StateInflight {
+		return ErrBadState
+	}
+	now := c.nowMs()
+	switch o.Kind {
+	case KindDelivered:
+		m.State = store.StateDelivered
+	case KindBounced:
+		m.State = store.StateBounced
+	case KindExpired:
+		m.State = store.StateExpired
+	case KindDeferred:
+		m.State, m.NextAtMs = store.StateQueued, o.NextAtMs
+	default:
+		return fmt.Errorf("engine: outcome kind %q", o.Kind)
+	}
+	m.UpdatedAtMs = now
+	c.update(m)
+	c.chargeEnd(id, netip.Addr{}, now)
+	if m.State == store.StateQueued {
+		c.enqueue(m)
+	}
+	c.event(&store.Event{Kind: o.Kind, Provider: o.Route.Provider, MXHost: o.Route.MXHost,
+		SrcIP: o.Route.SrcIP, Attempt: m.Attempts, Code: o.Code, Enhanced: o.Enhanced, Text: o.Text,
+		Class: o.Class, Subtype: o.Subtype, RuleID: o.RuleID, Detail: detail(o.Detail)}, m)
+	return nil
+}
+
+func (c *Core) update(m *store.Message) {
+	cp := *m
+	c.writes = append(c.writes, store.Write{UpdateMessage: &cp})
+}
+
+// event fills the message columns of e and appends it.
+func (c *Core) event(e *store.Event, m *store.Message) {
+	e.MsgID, e.Tenant, e.Domain, e.MsgType = m.ID, m.Tenant, m.Domain, m.MsgType
+	c.writeEvent(e, c.nowMs())
+	if e.Kind == KindDelivered || e.Kind == KindBounced {
+		c.tenantResult(m.Tenant, e.Kind == KindBounced)
+	}
+}
+
+func (c *Core) writeEvent(e *store.Event, at int64) {
+	e.AtMs = at
+	c.writes = append(c.writes, store.Write{Event: e})
+}
+
+// detail encodes an event detail; encoding/json sorts map keys, so the text
+// is deterministic. A nil or empty map is NULL.
+func detail(d map[string]any) string {
+	if len(d) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(d)
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
+}

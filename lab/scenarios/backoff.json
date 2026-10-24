@@ -1,0 +1,11 @@
+{
+  "name": "backoff",
+  "description": "Un dominio que siempre difiere (always-defer, 451 4.3.0 al final de DATA) con el calendario de reintentos de lab/engine.json (contrato 5, R-5321 §4.5.4.1): cada mensaje se reintenta hasta agotar su vida de 5 días, expira y su DSN con MAIL FROM:<> llega al remitente en baseline.test.",
+  "engine": {"base": "lab/engine.json"},
+  "profiles": ["always-defer", "baseline"],
+  "tenants": [{"name": "acme", "from": "notify@baseline.test"}],
+  "domains": [{"domain": "always-defer.test"}],
+  "messages": 3,
+  "arrival": {"process": "poisson", "rate_per_s": 0.01},
+  "duration_s": 518400
+}

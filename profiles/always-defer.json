@@ -1,0 +1,14 @@
+{
+  "name": "always-defer",
+  "sources": ["R-5321", "R-3463"],
+  "adaptation_period_s": 0,
+  "hosts": ["mx1.always-defer.test"],
+  "rules": [
+    {"id": "always_defer.data_end", "kind": "respond",
+     "params": {"stage": "data_end", "match": {},
+                "response": {"code": 451, "enhanced": "4.3.0", "text": "Requested action aborted: local error in processing"},
+                "close": false},
+     "source": "R-5321", "assumption": false,
+     "note": "Código y texto de RFC 5321 §4.2.3 (código extendido según RFC 3463). Responder siempre así es diseño del proyecto para probar backoff y expiración"}
+  ]
+}

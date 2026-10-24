@@ -1,0 +1,26 @@
+{
+  "name": "determinism",
+  "description": "Mezcla que recorre casi todos los caminos del motor en una hora virtual: dos tenants, entregas a los tres perfiles de proveedor y a baseline, buzones inexistentes de gmail-model con direcciones repetidas (rebote NoEmail y supresión), un dominio que siempre difiere (expiración y DSN con un calendario corto), null MX y un dominio inexistente. Dos corridas con la misma semilla deben dar el mismo trace.sha256.",
+  "engine": {
+    "base": "lab/engine.json",
+    "set": {"retry_policy": {"initial_s": 60, "factor": 2, "max_s": 600, "lifetime_s": 3600}}
+  },
+  "profiles": ["gmail-model", "yahoo-model", "outlook-model", "baseline", "always-defer"],
+  "tenants": [
+    {"name": "acme", "from": "notify@baseline.test", "msg_type": "transactional", "weight": 3},
+    {"name": "globex", "from": "news@baseline.test", "msg_type": "marketing", "weight": 1}
+  ],
+  "domains": [
+    {"domain": "gmail-model.test", "weight": 4},
+    {"domain": "gmail-model.test", "local_prefix": "nouser", "recipients": 5, "weight": 1},
+    {"domain": "yahoo-model.test", "weight": 4},
+    {"domain": "outlook-model.test", "weight": 2},
+    {"domain": "baseline.test", "weight": 2},
+    {"domain": "always-defer.test", "weight": 1},
+    {"domain": "nullmx.test", "weight": 1},
+    {"domain": "missing.test", "weight": 1}
+  ],
+  "messages": 600,
+  "arrival": {"process": "poisson", "rate_per_s": 2},
+  "duration_s": 7200
+}

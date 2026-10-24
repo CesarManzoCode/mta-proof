@@ -1,0 +1,7 @@
+{
+  "name": "baseline",
+  "sources": ["R-5321"],
+  "adaptation_period_s": 0,
+  "hosts": ["mx1.baseline.test"],
+  "rules": []
+}

@@ -1,0 +1,43 @@
+{
+  "http": "127.0.0.1:8025",
+  "dns": "127.0.0.1:53",
+  "smtp_port": 25,
+  "hostname": "engine.mtaproof.test",
+  "postmaster": "postmaster@engine.mtaproof.test",
+  "seed": 1,
+  "max_batch": 256,
+  "warmup": {
+    "source": "R-RESEND-WARMUP",
+    "note": "Plan de dominio nuevo de R-RESEND-WARMUP: tope diario de los días 1 a 7 y tope horario de los días 4 a 7 (null: sin tope). Se aplica a toda IP de un pool que no sea warm ni traiga su propio plan.",
+    "plan": {
+      "daily": [150, 250, 400, 700, 1000, 1500, 2000],
+      "hourly": [null, null, null, 50, 75, 100, 150]
+    },
+    "origin_ms": 0
+  },
+  "pools": [
+    {"name": "shared", "tenants": ["*"], "ips": [{"ip": "127.0.2.1", "warm": true}]}
+  ],
+  "route_ttl_s": 300,
+  "idle_s": 5,
+  "timeouts": {"connect_s": 10, "command_s": 30, "data_end_s": 60},
+  "retry_policy": {"initial_s": 1800, "factor": 2, "max_s": 10800, "lifetime_s": 432000},
+  "providers": [
+    {"name": "gmail-model", "mx_suffixes": ["gmail-model.test"]},
+    {"name": "yahoo-model", "mx_suffixes": ["yahoo-model.test"]},
+    {"name": "outlook-model", "mx_suffixes": ["outlook-model.test"]},
+    {"name": "baseline", "mx_suffixes": ["baseline.test"]},
+    {"name": "always-defer", "mx_suffixes": ["always-defer.test"]},
+    {"name": "latency-model", "mx_suffixes": ["latency-model.test"]}
+  ],
+  "limits": {
+    "domain": {"*": {"connections": 5, "msgs_per_conn": 100}},
+    "provider": {},
+    "tenant": {},
+    "src_ip": {"*": {"connections": 50}}
+  },
+  "adapt": {"rate_window_s": 60},
+  "tenant_pause": {"bounce_threshold": 0.04, "window": 200, "resume_s": 300},
+  "tls": {"ca_file": "", "default": "opportunistic", "domains": {"tls-required.test": "required"}, "providers": {}},
+  "dkim": {"key_dir": "", "selector": "lab", "domains": ["baseline.test", "auth-good.test", "auth-broken.test"]}
+}

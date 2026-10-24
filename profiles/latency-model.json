@@ -1,0 +1,11 @@
+{
+  "name": "latency-model",
+  "sources": ["R-5321"],
+  "adaptation_period_s": 0,
+  "hosts": ["mx1.latency-model.test"],
+  "rules": [
+    {"id": "latency.data_end", "kind": "latency", "params": {"stage": "data_end", "ms": 200},
+     "assumption": true,
+     "note": "Receptor que acepta todo (RFC 5321) y tarda 200 ms en responder al final de DATA. La cifra es supuesto del proyecto: da a los destinos sanos del escenario isolation un tiempo de entrega distinto de cero"}
+  ]
+}

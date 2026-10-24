@@ -1,0 +1,29 @@
+{
+  "name": "yahoo-model",
+  "sources": ["R-YAHOO", "R-SUPED-YAHOO", "R-RESEND-FORGE"],
+  "limitations": "Yahoo publica que limita los mensajes por conexión y que cierra sin error (R-YAHOO), pero no publica cifras: todas son supuestos. Los textos 421 [TSS04] y 421 [IPTS04] provienen de una fuente secundaria (R-SUPED-YAHOO) y su condición de disparo es supuesto.",
+  "adaptation_period_s": 300,
+  "hosts": ["mx1.yahoo-model.test"],
+  "rules": [
+    {"id": "yahoo.max_msgs_per_conn", "kind": "max_msgs_per_conn", "params": {"limit": 20},
+     "on_violation": {"action": "close_silent"},
+     "source": "R-YAHOO", "assumption": true,
+     "note": "Yahoo publica el comportamiento (cierre sin mensaje de error, se puede reconectar enseguida), no la cifra"},
+    {"id": "yahoo.concurrency", "kind": "concurrency", "params": {"limit": 5},
+     "on_violation": {"action": "respond_close",
+                      "response": {"code": 421, "enhanced": "4.7.0", "text": "[TSS04] Message temporarily deferred by Yahoo"}},
+     "source": "R-SUPED-YAHOO", "assumption": true,
+     "note": "R-YAHOO admite concurrencia sin publicar cifra; el límite de 5 y el uso de TSS04 aquí son supuestos"},
+    {"id": "yahoo.rate_ip", "kind": "rate", "params": {"scope": "src_ip", "limit": 300, "per_s": 60},
+     "on_violation": {"action": "respond_close",
+                      "response": {"code": 421, "enhanced": "4.7.0", "text": "[TSS04] Message temporarily deferred by Yahoo"}},
+     "source": "R-SUPED-YAHOO", "assumption": true,
+     "note": "Texto de fuente secundaria; 300 mensajes por minuto por IP es supuesto"},
+    {"id": "yahoo.unknown_ip", "kind": "unknown_ip",
+     "params": {"known_ips": ["127.0.2.0/28"], "max_msgs_per_conn": 10, "rate": {"limit": 30, "per_s": 60}},
+     "on_violation": {"action": "respond_close",
+                      "response": {"code": 421, "enhanced": "", "text": "[IPTS04] Message deferred for IP policy reasons"}},
+     "source": "R-SUPED-YAHOO", "assumption": true,
+     "note": "Texto de fuente secundaria, sin código extendido en la fuente; la lista de conocidas y las cifras son supuestos"}
+  ]
+}

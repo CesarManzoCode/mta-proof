@@ -1,0 +1,910 @@
+{
+  "dependencies": [
+    {
+      "ecosystem": "go",
+      "license": "MIT",
+      "license_file": "LICENSE",
+      "name": "blitiri.com.ar/go/spf",
+      "other_files": [],
+      "version": "v1.6.0"
+    },
+    {
+      "ecosystem": "go",
+      "license": "MIT",
+      "license_file": "LICENSE",
+      "name": "github.com/dustin/go-humanize",
+      "other_files": [],
+      "version": "v1.1.0"
+    },
+    {
+      "ecosystem": "go",
+      "license": "MIT",
+      "license_file": "LICENSE",
+      "name": "github.com/emersion/go-message",
+      "other_files": [],
+      "version": "v0.18.1"
+    },
+    {
+      "ecosystem": "go",
+      "license": "BSD-2-Clause",
+      "license_file": "LICENSE",
+      "name": "github.com/emersion/go-milter",
+      "other_files": [],
+      "version": "v0.4.1"
+    },
+    {
+      "ecosystem": "go",
+      "license": "MIT",
+      "license_file": "LICENSE",
+      "name": "github.com/emersion/go-msgauth",
+      "other_files": [],
+      "version": "v0.7.0"
+    },
+    {
+      "ecosystem": "go",
+      "license": "Apache-2.0",
+      "license_file": "LICENSE",
+      "name": "github.com/google/pprof",
+      "other_files": [],
+      "version": "v0.0.0-20261016150608-1facf8f91b50"
+    },
+    {
+      "ecosystem": "go",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "name": "github.com/google/uuid",
+      "other_files": [],
+      "version": "v1.6.0"
+    },
+    {
+      "ecosystem": "go",
+      "license": "MPL-2.0",
+      "license_file": "LICENSE",
+      "name": "github.com/hashicorp/golang-lru/v2",
+      "other_files": [],
+      "version": "v2.0.7"
+    },
+    {
+      "ecosystem": "go",
+      "license": "MIT",
+      "license_file": "LICENSE",
+      "name": "github.com/mattn/go-isatty",
+      "other_files": [],
+      "version": "v0.0.24"
+    },
+    {
+      "ecosystem": "go",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "name": "github.com/miekg/dns",
+      "other_files": [
+        "COPYRIGHT"
+      ],
+      "version": "v1.1.73"
+    },
+    {
+      "ecosystem": "go",
+      "license": "MIT",
+      "license_file": "LICENSE",
+      "name": "github.com/ncruces/go-strftime",
+      "other_files": [],
+      "version": "v1.1.0"
+    },
+    {
+      "ecosystem": "go",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "name": "github.com/remyoudompheng/bigfft",
+      "other_files": [],
+      "version": "v0.0.0-20230129092748-24d4a6f8daec"
+    },
+    {
+      "ecosystem": "go",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "name": "golang.org/x/crypto",
+      "other_files": [
+        "PATENTS"
+      ],
+      "version": "v0.54.0"
+    },
+    {
+      "ecosystem": "go",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "name": "golang.org/x/mod",
+      "other_files": [
+        "PATENTS"
+      ],
+      "version": "v0.42.0"
+    },
+    {
+      "ecosystem": "go",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "name": "golang.org/x/net",
+      "other_files": [
+        "PATENTS"
+      ],
+      "version": "v0.57.0"
+    },
+    {
+      "ecosystem": "go",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "name": "golang.org/x/sync",
+      "other_files": [
+        "PATENTS"
+      ],
+      "version": "v0.24.0"
+    },
+    {
+      "ecosystem": "go",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "name": "golang.org/x/sys",
+      "other_files": [
+        "PATENTS"
+      ],
+      "version": "v0.49.0"
+    },
+    {
+      "ecosystem": "go",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "name": "golang.org/x/term",
+      "other_files": [
+        "PATENTS"
+      ],
+      "version": "v0.45.0"
+    },
+    {
+      "ecosystem": "go",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "name": "golang.org/x/text",
+      "other_files": [
+        "PATENTS"
+      ],
+      "version": "v0.40.0"
+    },
+    {
+      "ecosystem": "go",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "name": "golang.org/x/tools",
+      "other_files": [
+        "PATENTS",
+        "copyright"
+      ],
+      "version": "v0.52.0"
+    },
+    {
+      "ecosystem": "go",
+      "license": "Apache-2.0",
+      "license_file": "LICENSE",
+      "name": "gopkg.in/yaml.v3",
+      "other_files": [
+        "NOTICE"
+      ],
+      "version": "v3.0.1"
+    },
+    {
+      "ecosystem": "go",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "name": "modernc.org/cc/v4",
+      "other_files": [],
+      "version": "v4.30.3"
+    },
+    {
+      "ecosystem": "go",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "name": "modernc.org/ccgo/v4",
+      "other_files": [],
+      "version": "v4.37.0"
+    },
+    {
+      "ecosystem": "go",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "name": "modernc.org/fileutil",
+      "other_files": [],
+      "version": "v1.4.0"
+    },
+    {
+      "ecosystem": "go",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "name": "modernc.org/gc/v2",
+      "other_files": [],
+      "version": "v2.6.5"
+    },
+    {
+      "ecosystem": "go",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "name": "modernc.org/gc/v3",
+      "other_files": [],
+      "version": "v3.2.0"
+    },
+    {
+      "ecosystem": "go",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "name": "modernc.org/goabi0",
+      "other_files": [],
+      "version": "v0.2.0"
+    },
+    {
+      "ecosystem": "go",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "name": "modernc.org/libc",
+      "other_files": [
+        "LICENSE-3RD-PARTY.md"
+      ],
+      "version": "v1.79.0"
+    },
+    {
+      "ecosystem": "go",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "name": "modernc.org/mathutil",
+      "other_files": [],
+      "version": "v1.7.1"
+    },
+    {
+      "ecosystem": "go",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "name": "modernc.org/memory",
+      "other_files": [
+        "LICENSE-GO",
+        "LICENSE-LOGO",
+        "LICENSE-MMAP-GO"
+      ],
+      "version": "v1.12.1"
+    },
+    {
+      "ecosystem": "go",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "name": "modernc.org/opt",
+      "other_files": [],
+      "version": "v0.2.0"
+    },
+    {
+      "ecosystem": "go",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "name": "modernc.org/sortutil",
+      "other_files": [],
+      "version": "v1.2.1"
+    },
+    {
+      "ecosystem": "go",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "name": "modernc.org/sqlite",
+      "other_files": [
+        "LICENSE-3RD-PARTY.md",
+        "LICENSE-SQLITE",
+        "LICENSE-SQLITE_VEC"
+      ],
+      "version": "v1.61.0"
+    },
+    {
+      "ecosystem": "go",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "name": "modernc.org/strutil",
+      "other_files": [],
+      "version": "v1.2.1"
+    },
+    {
+      "ecosystem": "go",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "name": "modernc.org/token",
+      "other_files": [],
+      "version": "v1.1.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "@haraka/email-address",
+      "version": "3.1.6"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "@haraka/ocsp",
+      "version": "1.2.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "ISC",
+      "name": "@isaacs/fs-minipass",
+      "version": "4.0.1"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "@msimerson/stun",
+      "version": "3.2.1"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "@redis/bloom",
+      "version": "6.3.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "@redis/client",
+      "version": "6.3.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "@redis/json",
+      "version": "6.3.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "@redis/search",
+      "version": "6.3.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "@redis/time-series",
+      "version": "6.3.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "Haraka",
+      "version": "3.3.5"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "ISC",
+      "name": "abbrev",
+      "version": "5.0.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "asn1.js",
+      "version": "5.4.1"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "asn1.js-rfc2560",
+      "version": "5.0.1"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "asn1.js-rfc5280",
+      "version": "3.0.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "binary-data",
+      "version": "0.6.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "bn.js",
+      "version": "4.12.5"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "BlueOak-1.0.0",
+      "name": "chownr",
+      "version": "3.0.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "encoding-japanese",
+      "version": "2.4.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "env-paths",
+      "version": "2.2.1"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "Apache-2.0",
+      "name": "exponential-backoff",
+      "version": "3.1.3"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "fdir",
+      "version": "6.5.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "generate-function",
+      "version": "2.3.1"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "ISC",
+      "name": "graceful-fs",
+      "version": "4.2.11"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-config",
+      "version": "1.8.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-constants",
+      "version": "1.0.8"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-dsn",
+      "version": "1.2.1"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-email-message",
+      "version": "1.4.4"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-message-stream",
+      "version": "2.0.8"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-net-utils",
+      "version": "1.10.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-net-utils",
+      "version": "1.9.4"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-notes",
+      "version": "1.1.3"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-plugin-access",
+      "version": "1.4.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-plugin-aliases",
+      "version": "1.1.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-plugin-asn",
+      "version": "2.2.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-plugin-attachment",
+      "version": "1.2.1"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-plugin-bounce",
+      "version": "2.2.1"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-plugin-clamd",
+      "version": "1.0.6"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-plugin-dcc",
+      "version": "1.1.1"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-plugin-dkim",
+      "version": "1.3.1"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-plugin-dns-list",
+      "version": "1.3.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-plugin-early_talker",
+      "version": "1.0.2"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-plugin-fcrdns",
+      "version": "1.2.1"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-plugin-geoip",
+      "version": "1.1.2"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-plugin-greylist",
+      "version": "1.2.1"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-plugin-headers",
+      "version": "1.2.1"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-plugin-helo.checks",
+      "version": "1.1.3"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-plugin-karma",
+      "version": "2.5.2"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-plugin-known-senders",
+      "version": "1.2.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-plugin-limit",
+      "version": "1.3.2"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-plugin-mail_from.is_resolvable",
+      "version": "1.3.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-plugin-messagesniffer",
+      "version": "1.0.2"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-plugin-qmail-deliverable",
+      "version": "1.4.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-plugin-redis",
+      "version": "2.1.1"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-plugin-relay",
+      "version": "1.0.2"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-plugin-rspamd",
+      "version": "1.6.1"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-plugin-spamassassin",
+      "version": "1.1.2"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-plugin-spf",
+      "version": "1.3.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-plugin-syslog",
+      "version": "1.1.2"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-plugin-uribl",
+      "version": "2.0.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-results",
+      "version": "2.4.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-tld",
+      "version": "1.3.6"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-utils",
+      "version": "2.1.1"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "haraka-utils",
+      "version": "2.2.1"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "hjson",
+      "version": "3.2.2"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "iconv-lite",
+      "version": "0.7.3"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "ISC",
+      "name": "inherits",
+      "version": "2.0.4"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "ip2buf",
+      "version": "2.0.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "ipaddr.js",
+      "version": "2.5.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "is-plain-object",
+      "version": "2.0.4"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "is-property",
+      "version": "1.0.2"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "BlueOak-1.0.0",
+      "name": "isexe",
+      "version": "4.0.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "isobject",
+      "version": "3.0.1"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "libbase64",
+      "version": "1.4.1"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "libmime",
+      "version": "5.6.3"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "libqp",
+      "version": "2.1.3"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "libqp",
+      "version": "3.0.1"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "maxmind",
+      "version": "5.0.7"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "ISC",
+      "name": "minimalistic-assert",
+      "version": "1.0.1"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "BlueOak-1.0.0",
+      "name": "minipass",
+      "version": "7.1.3"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "minizlib",
+      "version": "3.1.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "mmdb-lib",
+      "version": "3.0.3"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "modern-syslog",
+      "version": "1.2.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "nan",
+      "version": "2.27.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "node-gyp",
+      "version": "13.1.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "ISC",
+      "name": "nopt",
+      "version": "10.0.1"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "picomatch",
+      "version": "4.0.7"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "ISC",
+      "name": "proc-log",
+      "version": "7.0.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "redis",
+      "version": "6.3.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "safer-buffer",
+      "version": "2.1.2"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "ISC",
+      "name": "semver",
+      "version": "7.8.5"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "BlueOak-1.0.0",
+      "name": "tar",
+      "version": "7.5.22"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "BSD-3-Clause",
+      "name": "tiny-lru",
+      "version": "13.0.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "tinyglobby",
+      "version": "0.2.17"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "tmp",
+      "version": "0.2.7"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "turbo-crc32",
+      "version": "1.0.1"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "MIT",
+      "name": "undici",
+      "version": "8.12.3"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "ISC",
+      "name": "which",
+      "version": "7.0.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "BlueOak-1.0.0",
+      "name": "yallist",
+      "version": "5.0.0"
+    },
+    {
+      "ecosystem": "npm",
+      "license": "ISC",
+      "name": "yaml",
+      "version": "2.9.1"
+    }
+  ],
+  "format": "mta-proof-licenses/2"
+}

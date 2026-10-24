@@ -1,0 +1,46 @@
+{
+  "ttl": 300,
+  "records": [
+    {"name": "gmail-model.test", "type": "MX", "pref": 10, "host": "mx1.gmail-model.test"},
+    {"name": "gmail-model.test", "type": "MX", "pref": 20, "host": "mx2.gmail-model.test"},
+    {"name": "mx1.gmail-model.test", "type": "A", "addr": "127.0.1.1"},
+    {"name": "mx2.gmail-model.test", "type": "A", "addr": "127.0.1.2"},
+
+    {"name": "yahoo-model.test", "type": "MX", "pref": 10, "host": "mx1.yahoo-model.test"},
+    {"name": "mx1.yahoo-model.test", "type": "A", "addr": "127.0.1.3"},
+
+    {"name": "outlook-model.test", "type": "MX", "pref": 10, "host": "mx1.outlook-model.test"},
+    {"name": "mx1.outlook-model.test", "type": "A", "addr": "127.0.1.4"},
+
+    {"name": "baseline.test", "type": "MX", "pref": 10, "host": "mx1.baseline.test"},
+    {"name": "mx1.baseline.test", "type": "A", "addr": "127.0.1.5"},
+
+    {"name": "always-defer.test", "type": "MX", "pref": 10, "host": "mx1.always-defer.test"},
+    {"name": "mx1.always-defer.test", "type": "A", "addr": "127.0.1.6"},
+
+    {"name": "latency-model.test", "type": "MX", "pref": 10, "host": "mx1.latency-model.test"},
+    {"name": "alt.latency-model.test", "type": "MX", "pref": 10, "host": "mx1.latency-model.test"},
+    {"name": "mx1.latency-model.test", "type": "A", "addr": "127.0.1.8"},
+
+    {"name": "nullmx.test", "type": "MX", "pref": 0, "host": "."},
+
+    {"name": "tls-required.test", "type": "MX", "pref": 10, "host": "mx1.baseline.test"},
+
+    {"name": "fallback.test", "type": "MX", "pref": 10, "host": "mx1.fallback.test"},
+    {"name": "fallback.test", "type": "MX", "pref": 20, "host": "mx2.fallback.test"},
+    {"name": "mx1.fallback.test", "type": "A", "addr": "127.0.1.7"},
+    {"name": "mx2.fallback.test", "type": "A", "addr": "127.0.1.5"},
+
+    {"name": "baseline.test", "type": "TXT", "text": "v=spf1 ip4:127.0.2.0/24 -all"},
+    {"name": "lab._domainkey.baseline.test", "type": "DKIM", "key": "signing"},
+    {"name": "_dmarc.baseline.test", "type": "TXT", "text": "v=DMARC1; p=none"},
+
+    {"name": "auth-good.test", "type": "TXT", "text": "v=spf1 ip4:127.0.2.0/24 -all"},
+    {"name": "lab._domainkey.auth-good.test", "type": "DKIM", "key": "signing"},
+    {"name": "_dmarc.auth-good.test", "type": "TXT", "text": "v=DMARC1; p=reject; adkim=s; aspf=s"},
+
+    {"name": "auth-broken.test", "type": "TXT", "text": "v=spf1 -ip4:127.0.2.0/24 ?all"},
+    {"name": "lab._domainkey.auth-broken.test", "type": "DKIM", "key": "other"},
+    {"name": "_dmarc.auth-broken.test", "type": "TXT", "text": "v=DMARC1; p=none"}
+  ]
+}

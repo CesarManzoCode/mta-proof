@@ -1,0 +1,28 @@
+{
+  "name": "warmup",
+  "description": "Pool de cuatro IPs de origen con el plan de dominio nuevo de R-RESEND-WARMUP (lab/engine.json) en etapas distintas: 127.0.2.1 empieza en el día 1 del plan, 127.0.2.2 en el 3 y 127.0.2.3 en el 5, las tres dentro de las conocidas de gmail-model y yahoo-model (127.0.2.0/28); 127.0.2.100 empieza en el día 2 y es desconocida para los dos. Llegan 38 000 mensajes en los primeros minutos, más que la capacidad del plan en los siete días virtuales (35 950), así que los topes atan cada día y la cola nunca se vacía. El motor limita cada par proveedor e IP a 100 intentos por minuto (supuesto), por debajo de la tasa de las conocidas y por encima de la de las desconocidas, que reciben 421 hasta que el motor aprende su límite. La vida se alarga a 8 días para que nada expire dentro de la corrida.",
+  "engine": {
+    "base": "lab/engine.json",
+    "set": {
+      "pools": [
+        {"name": "warming", "tenants": ["*"], "ips": [
+          {"ip": "127.0.2.1", "start_day": 1},
+          {"ip": "127.0.2.2", "start_day": 3},
+          {"ip": "127.0.2.3", "start_day": 5},
+          {"ip": "127.0.2.100", "start_day": 2}
+        ]}
+      ],
+      "retry_policy": {"lifetime_s": 691200},
+      "limits": {"provider": {"*": {"rate": {"limit": 100, "per_s": 60}}}}
+    }
+  },
+  "profiles": ["gmail-model", "yahoo-model", "baseline"],
+  "tenants": [{"name": "acme", "from": "notify@baseline.test"}],
+  "domains": [
+    {"domain": "gmail-model.test"},
+    {"domain": "yahoo-model.test"}
+  ],
+  "messages": 38000,
+  "arrival": {"process": "poisson", "rate_per_s": 50},
+  "duration_s": 604799
+}

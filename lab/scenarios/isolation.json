@@ -1,0 +1,20 @@
+{
+  "name": "isolation",
+  "description": "Corrida base de destination_isolation: un tenant envía a tres destinos con la configuración de lab/engine.json. latency-model.test y alt.latency-model.test (perfil latency-model, 200 ms al final de DATA, supuesto) reciben cuatro de cada cinco mensajes; gmail-model.test, por debajo de sus tasas supuestas, el resto. La variante throttled es la misma carga con la misma semilla y gmail-model.test casi estrangulado por el motor: una conexión y 6 intentos por minuto, como tras aprender un límite bajo, frente a unos 60 mensajes por minuto que le llegan. Su cola crece durante toda la llegada; los otros dos destinos no deben notarlo.",
+  "engine": {"base": "lab/engine.json"},
+  "profiles": ["latency-model", "gmail-model", "baseline"],
+  "tenants": [{"name": "acme", "from": "notify@baseline.test"}],
+  "domains": [
+    {"domain": "latency-model.test", "weight": 2},
+    {"domain": "alt.latency-model.test", "weight": 2},
+    {"domain": "gmail-model.test", "weight": 1}
+  ],
+  "messages": 3000,
+  "arrival": {"process": "poisson", "rate_per_s": 5},
+  "duration_s": 86400,
+  "variants": {
+    "throttled": {
+      "engine": {"set": {"limits": {"domain": {"gmail-model.test": {"connections": 1, "rate": {"limit": 6, "per_s": 60}}}}}}
+    }
+  }
+}
