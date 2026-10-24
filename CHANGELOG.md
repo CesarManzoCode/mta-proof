@@ -30,6 +30,8 @@ Primera versión entregable: K3 (mutantes, validación externa, licencias y modo
 
 ### Corregido
 
+- `licenses/inventory.json` pasa al formato `mta-proof-licenses/2`: una sola lista `dependencies` con el `ecosystem` de cada entrada, en lugar de las listas `go` y `npm` separadas. Razón: el inventario es la evidencia que se lee por nombre de dependencia (por ejemplo `modernc.org/sqlite`, `github.com/miekg/dns` o `Haraka`), y con dos listas un lector de `dependencies` no encontraba ninguna. El contenido no cambia: las mismas 134 entradas (35 Go y 99 npm), regeneradas con `python3 -m verifier inventory`.
+- `offline` deja su traza en `out/runs/offline/interfaces.json` (los mismos `details`): antes su `trace` era `null`, la única propiedad del reporte sin una traza que exista (3.7).
 - El socket de control de `mtasim` va a un directorio temporal cuando `<corrida>/control.sock` no cabe en los 108 bytes de `sun_path`: bajo `out/runs/mutation/<nombre>/runs/lab-1/campaign/` la ruta medía 110 a 123 bytes y `mtasim` no arrancaba (`bind: invalid argument`).
 
 ### Decisiones

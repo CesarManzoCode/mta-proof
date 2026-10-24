@@ -2,7 +2,9 @@ import copy
 import os
 import tempfile
 import unittest
+from unittest import mock
 
+from verifier import context
 from verifier.props import licenses, offline
 
 MIT = ("Permission is hereby granted, free of charge, to any person obtaining a copy\n"
@@ -14,10 +16,9 @@ GPL = "GNU GENERAL PUBLIC LICENSE\nVersion 3, 29 June 2007"
 
 
 def inventory(npm_license="MIT"):
-    return {"format": licenses.FORMAT,
-            "go": [{"name": "example.test/a", "version": "v1.0.0", "license": "BSD-3-Clause",
-                    "license_file": "LICENSE", "other_files": []}],
-            "npm": [{"name": "pkg", "version": "1.0.0", "license": npm_license}]}
+    return licenses.build([{"name": "example.test/a", "version": "v1.0.0", "license": "BSD-3-Clause",
+                            "license_file": "LICENSE", "other_files": []}],
+                          [{"name": "pkg", "version": "1.0.0", "license": npm_license}])
 
 
 class ClassifyTest(unittest.TestCase):
@@ -76,12 +77,18 @@ class InventoryTest(unittest.TestCase):
     def test_stale_inventory_fails(self):
         versioned = inventory()
         regenerated = inventory()
-        regenerated["npm"][0]["version"] = "1.0.1"
+        regenerated["dependencies"][1]["version"] = "1.0.1"
         ok, details, failures = licenses.check(regenerated, versioned)
         self.assertFalse(ok)
         self.assertEqual(details["stale"]["added"], ["npm pkg 1.0.1"])
         self.assertEqual(details["stale"]["removed"], ["npm pkg 1.0.0"])
         self.assertFalse(licenses.check(inventory(), None)[0])
+
+    def test_inventory_is_one_tagged_list(self):
+        inv = inventory()
+        self.assertEqual(sorted(inv), ["dependencies", "format"])
+        self.assertEqual([(e["ecosystem"], e["name"]) for e in inv["dependencies"]],
+                         [("go", "example.test/a"), ("npm", "pkg")])
 
     def test_versioned_inventory_is_open(self):
         root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -108,6 +115,15 @@ class OfflineTest(unittest.TestCase):
                 os.makedirs(os.path.join(d, "class", "net", name))
             self.assertEqual(offline.interfaces(d), ["lo", "veth0"])
             self.assertFalse(offline.check(offline.interfaces(d), ["lo"])[0])
+
+    def test_run_leaves_its_trace(self):
+        with tempfile.TemporaryDirectory() as root:
+            ctx = context.Context(root, "out", params={})
+            with mock.patch.object(offline, "namespace_sysfs_interfaces", return_value=["lo"]), \
+                    mock.patch.object(offline.socket, "if_nameindex", return_value=[(1, "lo")]):
+                res = offline.run(ctx)
+            self.assertEqual(res["trace"], os.path.join("out", "runs", "offline", "interfaces.json"))
+            self.assertTrue(os.path.isfile(os.path.join(root, res["trace"])))
 
 
 if __name__ == "__main__":

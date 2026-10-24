@@ -85,7 +85,7 @@ Cada fila es una propiedad de `out/report.json`: el criterio de la idea al que r
 | Poder de detección | `mutation_detection` | real y simulado | `out/runs/mutation/<nombre>/report.json` y `verify.log` |
 | Validación externa | `external_validation` | real | `out/runs/external-1/` (`receiver.jsonl`, `inject.jsonl`, `haraka.log`) |
 | Licencias | `licenses` | estático | `licenses/inventory.json` (regenerado en `out/runs/licenses/inventory.json`) |
-| Licencias (sin Internet) | `offline` | todo | sin archivos: `details.interfaces` e `if_nameindex` |
+| Licencias (sin Internet) | `offline` | todo | `out/runs/offline/interfaces.json`: `interfaces` e `if_nameindex` |
 
 Para repetir una decisión a mano basta la traza: los registros tienen los formatos de la sección 3 del contrato y `engine.db` se puede abrir con `sqlite3` en solo lectura o con `bin/mtaq`.
 

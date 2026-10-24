@@ -4,8 +4,9 @@ The inventory (licenses/inventory.json, versioned) is generated, never written
 by hand: the Go modules come from `go list -m -json all` and the license of
 each one from its license file in the module cache; the npm packages from
 external/haraka/package-lock.json, whose entries carry the package's own
-`license` field. The property regenerates it and fails if it differs from the
-versioned one or if any license is not in ALLOWED.
+`license` field. The file is one flat `dependencies` list, each entry tagged
+with its `ecosystem` (go first, then npm). The property regenerates it and
+fails if it differs from the versioned one or if any license is not in ALLOWED.
 
 `python3 -m verifier inventory` writes the versioned file.
 """
@@ -19,7 +20,8 @@ from verifier import report
 
 NAME = "licenses"
 INVENTORY = os.path.join("licenses", "inventory.json")
-FORMAT = "mta-proof-licenses/1"
+FORMAT = "mta-proof-licenses/2"
+ECOSYSTEMS = ("go", "npm")
 LOCKFILE = os.path.join("external", "haraka", "package-lock.json")
 # Open licenses the project accepts. Widen only with OSI-approved licenses,
 # noted in the CHANGELOG. "public-domain" is a dedication, not an SPDX id.
@@ -171,8 +173,17 @@ def generate(root):
                            "(make deps fills the module cache)")
     with open(os.path.join(root, LOCKFILE), encoding="utf-8") as f:
         lock = json.load(f)
-    return {"format": FORMAT, "go": go_inventory(parse_json_stream(res.stdout)),
-            "npm": npm_inventory(lock)}
+    return build(go_inventory(parse_json_stream(res.stdout)), npm_inventory(lock))
+
+
+def build(go, npm):
+    """The inventory object: one list, each entry tagged with its ecosystem."""
+    deps = [dict(e, ecosystem=eco) for eco, entries in zip(ECOSYSTEMS, (go, npm)) for e in entries]
+    return {"format": FORMAT, "dependencies": deps}
+
+
+def by_ecosystem(inv, eco):
+    return [e for e in inv.get("dependencies") or [] if e.get("ecosystem") == eco]
 
 
 def dumps(inventory):
@@ -188,15 +199,15 @@ def write(root):
 
 
 def _keyed(inv):
-    return {(eco, e["name"], e["version"]): e for eco in ("go", "npm") for e in inv.get(eco) or []}
+    return {(eco, e["name"], e["version"]): e for eco in ECOSYSTEMS for e in by_ecosystem(inv, eco)}
 
 
 def check(regenerated, versioned):
     """versioned: the parsed licenses/inventory.json, or None if missing."""
     failures = []
     counts = {}
-    for eco in ("go", "npm"):
-        entries = regenerated.get(eco) or []
+    for eco in ECOSYSTEMS:
+        entries = by_ecosystem(regenerated, eco)
         counts[eco] = len(entries)
         for e in entries:
             if not allowed(e["license"]):
@@ -218,8 +229,8 @@ def check(regenerated, versioned):
                         f"{len(stale['added'])} added, {len(stale['removed'])} removed, "
                         f"{len(stale['changed'])} changed; python3 -m verifier inventory rewrites it")
     by_license = {}
-    for eco in ("go", "npm"):
-        for e in regenerated.get(eco) or []:
+    for eco in ECOSYSTEMS:
+        for e in by_ecosystem(regenerated, eco):
             by_license[e["license"]] = by_license.get(e["license"], 0) + 1
     details = {"inventory": INVENTORY, "dependencies": counts,
                "licenses": dict(sorted(by_license.items())), "allowed": list(ALLOWED),

@@ -6,9 +6,11 @@ the namespace shows the interfaces of the mounting process's network
 namespace, so the property mounts a fresh one on a temporary directory of
 the private mount namespace, reads its class/net and unmounts it. It also
 asks the kernel through a socket of this namespace (if_nameindex). Both must
-list exactly lo.
+list exactly lo. What it read goes to out/runs/offline/interfaces.json, the
+property's trace.
 """
 
+import json
 import os
 import socket
 import subprocess
@@ -51,4 +53,7 @@ def run(ctx):
     kernel_ifaces = sorted(name for _, name in socket.if_nameindex())
     ok, details, failures = check(sysfs_ifaces, kernel_ifaces)
     details["host_sysfs_interfaces"] = interfaces("/sys")
-    return report.result(NAME, ok, details, failures=failures)
+    path = os.path.join(ctx.fresh_dir(NAME), "interfaces.json")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(details, indent=2, sort_keys=True) + "\n")
+    return report.result(NAME, ok, details, trace=ctx.rel(path), failures=failures)
