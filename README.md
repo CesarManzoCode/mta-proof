@@ -126,11 +126,19 @@ En la corrida de K2, `m00001230` tiene dos intentos: el primero `interrupted` (e
 | K0 | Contrato, investigación y plan | hecho |
 | K1 | Simulador, motor, clasificación, backoff, DNS, determinismo, no pérdida bajo `kill -9` | cerrada |
 | K2 | Pools y calentamiento, tenants, aislamiento, TLS, autenticación, depuración | cerrada |
-| K3 | Mutantes, validación externa con Haraka, licencias y modo sin red | sus tres mini sprints hechos (k3-01, k3-02, k3-03); cierre pendiente |
+| K3 | Mutantes, validación externa con Haraka, licencias y modo sin red | Cerrada |
 
 ## Resultados
 
 ### Resultados finales (versión 1.0.0)
+
+Cierre de K3, 2026-10-23, sobre el commit `7029f9b`, en la máquina de desarrollo:
+
+- `make check` sale con 0: pasan los ocho paquetes Go con pruebas, las pruebas `TestMutant*` de `internal/engine` con cada una de las seis etiquetas y las 173 pruebas del verificador.
+- Pasan los cinco criterios de salida de K3: mutantes, validación externa con Haraka 3.3.5, licencias, modo sin red y reporte completo con las veintidós propiedades. Siguen pasando los ocho criterios de K2, los once de K1 y los nueve de K0.
+- La primera verificación de cierre falló en dos criterios y se corrigió en `7029f9b`: el inventario de licencias tenía las dependencias de Go y npm en listas separadas, y `offline` no dejaba traza (ver CHANGELOG).
+
+El registro del cierre anota el veredicto de cada criterio, no sus cifras. Las de la tabla son del `out/report.json` del `make verify` de k3-03, anterior a `7029f9b`, cuyo código solo cambia el formato del inventario y la traza de `offline`.
 
 `make verify` de k3-03, 2026-10-23 (de 18:35:09 a 19:34:07, −06:00), sobre `40979e3` con el árbol de trabajo de k3-03 (el `git_head` del reporte), en la máquina de desarrollo (Arch Linux, kernel 7.2.11, 12 CPU, 14 GiB visibles, disco SSD). Sale con 0: veredicto global `pass` en las veintidós propiedades. `make deps` y `make check` también salen con 0 (171 pruebas del verificador).
 
