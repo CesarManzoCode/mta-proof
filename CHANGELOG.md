@@ -1,8 +1,24 @@
 # Changelog
 
-## [K3] - sin cerrar
+## [1.0.0] - 2026-10-23
+
+Primera versión entregable: K3 (mutantes, validación externa, licencias y modo sin red) sobre K1 y K2. `make verify` decide las veintidós propiedades de la sección 4 del contrato.
+
+### Decisiones de producto
+
+- El producto es el banco de pruebas, no el motor: simulador con perfiles que citan sus fuentes, motor de referencia propio y un verificador independiente que decide sobre archivos crudos (D01, D02). Lo que no se demuestra vive solo en `LIMITATIONS.md` (D12).
+- Un comando único, `make verify`, sin Internet: corre dentro de un espacio de nombres de usuario, red y montaje con solo `lo` (D06), y desde 1.0.0 la propiedad `offline` lo comprueba en cada corrida. La red solo se usa una vez, en `make deps`.
+- Los mutantes son producto, no un gate (sección 7): la suite tiene que hacer caer cada uno de los seis.
+- La validación externa contra Haraka 3.3.5 solo compara veredictos, nunca velocidades (D19).
+- Licencia MIT (D18). Toda dependencia, directa o del grafo, tiene que tener una licencia abierta de la lista de `licenses`; el inventario se versiona y se regenera en cada `make verify`.
 
 ### Añadido
+
+- Propiedad `licenses` (k3-03): regenera el inventario de dependencias desde `go list -m -json all` (licencia leída del archivo de licencia de cada módulo en la caché) y desde `external/haraka/package-lock.json`, lo deja en `out/runs/licenses/inventory.json` y falla si difiere del versionado `licenses/inventory.json` o si alguna licencia no está en la lista permitida (MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0, ISC, MPL-2.0, 0BSD, Unlicense, BlueOak-1.0.0, Python-2.0 y dominio público). La lista no se amplió.
+- `licenses/inventory.json`: 35 módulos Go y 99 paquetes npm. `python3 -m verifier inventory` lo reescribe.
+- Propiedad `offline` (k3-03), primera de la suite: monta un `sysfs` propio dentro del espacio de nombres, lee su `class/net` y lo cruza con `socket.if_nameindex()`; pasa solo si la única interfaz es `lo`.
+- Pruebas `unittest` de las dos: una licencia no permitida, un inventario desactualizado o ausente y una interfaz extra fallan.
+- README con la guía de lectura de la evidencia (propiedad, criterio y traza), los resultados finales y el estado de los tres K.
 
 - Seis mutantes del motor (contrato 4.3), uno por etiqueta de compilación: `mut_no_backoff` (todo reintento espera el primer intervalo del calendario), `mut_retry_permanent` (difiere los rechazos 5xx), `mut_ignore_conn_limit` (no aplica el límite de mensajes por conexión aprendido), `mut_ack_before_persist` (el ingreso responde 202 antes del commit de su grupo), `mut_shared_queue` (una sola cola para todos los destinos) y `mut_exceed_warmup` (ignora el tope horario del plan). Cada uno es un archivo `internal/engine/mut_<nombre>.go` que reemplaza una función gancho cuya versión original vive en un `hook_*.go` con la etiqueta negada; `Mutant` nombra el mutante y `mtaengine` y `mtadst` lo escriben en su registro al arrancar.
 - `make build` compila, además de `bin/`, todos los binarios de `cmd/` con cada etiqueta en `bin/mut/<nombre>/`. `make check` corre también `go vet` y las pruebas `TestMutant*` de `internal/engine` con cada etiqueta.
@@ -18,6 +34,9 @@
 
 ### Decisiones
 
+- `make deps` corre `go mod download all` en lugar de `go mod download` (contrato 2.5): `licenses` corre `go list -m -json all` sin red y ese comando pide la información de versión de todo el grafo de módulos. Medido: con la caché de `go mod download`, sin red falla en 14 módulos que solo están en el grafo; con `all` sale con 0. `go.sum` gana 8 líneas de esos módulos.
+- `offline` no lee el `/sys/class/net` heredado, que dentro del espacio de nombres sigue mostrando las interfaces del anfitrión (medido de nuevo en k3-03: `docker0`, `enp5s0`, `enp7s0f3u2` y `lo`), sino el de un `sysfs` montado desde dentro, que muestra solo `lo`. Medido: con una interfaz `dummy0` agregada en el espacio de nombres, la propiedad falla.
+- D18 se completa con lo que midió el inventario: además de MIT, BSD y Apache, el grafo trae ISC, BlueOak-1.0.0 y MPL-2.0 (`github.com/hashicorp/golang-lru/v2`, que no se compila); todas abiertas.
 - Los mutantes se compilan también en `mtadst`, no solo en `mtaengine` como decía 4.3: `backoff_expiry`, `destination_isolation` e `ip_warmup` son simuladas y corren el motor dentro de `mtadst`.
 - `mut_retry_permanent` cambia la decisión de reintentar, no el clasificador: el evento `classified` sigue `permanent`, así la falla es la del enunciado (tratar el 5xx como transitorio) y no un corpus mal clasificado.
 - 10 de las 30 muertes de la campaña pasan a ser `post_202`; el total y las 5 `post_250` no cambian. Medido (semilla 1): con las 30 muertes de K1, `mut_ack_before_persist` perdió 0 mensajes contestados y `no_loss` pasó; matar al recibir el 202, sin detener el commit, perdió 14 de 40 con `mtaengine serve` recién arrancado, 2 de 30 tras 50 commits y 0 de 10 en la campaña, porque el commit termina antes de que el orquestador reaccione. Con el commit detenido: 20 de 20 en aislamiento con el mutante y 0 de 20 con el original; en la campaña, 10 de 10 muertes con un 202 recibido durante la detención con el mutante y 0 de 10 con el original.
@@ -35,6 +54,7 @@
 - `make check` sale con 0: los paquetes Go, las pruebas `TestMutant*` con cada una de las seis etiquetas y las 144 pruebas del verificador.
 - `make verify` sale con 0 con las diecinueve propiedades. En `mutation_detection` el original sale con 0 y cada mutante con 1: `mut_no_backoff` hace caer `backoff_expiry`; `mut_retry_permanent`, `outbound_auth` y `tenant_pause`; `mut_ignore_conn_limit`, `receiver_limits` (120 violaciones contadas en `limits`); `mut_ack_before_persist`, `no_loss` (10 mensajes contestados y perdidos) e `idempotency`; `mut_shared_queue`, `destination_isolation` y `tenant_pause`; `mut_exceed_warmup`, `ip_warmup`. Las cifras son de la verificación de cierre de este mini sprint, ejecutada sobre el árbol de trabajo antes del commit.
 - k3-02: `make deps` sale con 0 y `make check` también, con 160 pruebas del verificador. `make verify` sale con 0 con las veinte propiedades en 3 534 s (`real` 58 min 54 s, medido con `time`) y un `memory.peak` de 5 419 163 648 bytes. `external_validation` pasa con Haraka 3.3.5 y `config_sha256` `a48cf730…`: inyectó 10 015 mensajes, todas las conexiones vinieron de `127.0.2.2`, la carga duró 333,3 s y el drenaje 2,5 s. Contra `always-defer`, los 5 mensajes expiraron con DSN, con intervalos de 5,768 a 81,0 s y a lo sumo 1 001 ms por encima de su paso.
+- k3-03: `make deps` y `make check` salen con 0, con 171 pruebas del verificador. `make verify` sale con 0 con las veintidós propiedades en 3 533,7 s y un `memory.peak` de 5 809 086 464 bytes; `offline` ve solo `lo` y `licenses` encuentra el inventario versionado al día, con 35 módulos Go y 99 paquetes npm, todos con licencia permitida. `mutation_detection` sigue pasando con `licenses` y `offline` en las suites internas.
 
 ## [K2] - 2026-10-23
 

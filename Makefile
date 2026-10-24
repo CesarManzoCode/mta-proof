@@ -5,8 +5,9 @@ MUTANTS := mut_no_backoff mut_retry_permanent mut_ignore_conn_limit mut_ack_befo
 
 # deps: lo único que usa la red, una vez: módulos Go y Haraka fijado por su
 # package-lock.json (D08). npm ci no ejecuta scripts de instalación no aprobados.
+# "all" baja todo el grafo de módulos: licenses corre go list -m -json all sin red.
 deps:
-	go mod download
+	go mod download all
 	cd external/haraka && npm ci
 
 # build: binarios de cmd/ en bin/ y, por mutante, los mismos con su etiqueta en

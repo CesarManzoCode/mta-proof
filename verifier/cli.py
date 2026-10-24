@@ -1,4 +1,4 @@
-"""python3 -m verifier verify --out out [--only <property,...>]"""
+"""python3 -m verifier verify --out out [--only <property,...>] | inventory [--root .]"""
 
 import argparse
 import datetime
@@ -10,11 +10,12 @@ import traceback
 from verifier import context, netns, report
 from verifier.props import (backoff_expiry, bounded_duplicates, classification, debug_aggregates,
                             debug_timeline, destination_isolation, determinism, dns_mx, external_validation,
-                            idempotency, ip_warmup, mutation_detection, no_loss, outbound_auth,
-                            profile_sources, receiver_limits, resources, rfc5322_format, tenant_pause,
-                            tls_policy)
+                            idempotency, ip_warmup, licenses, mutation_detection, no_loss, offline,
+                            outbound_auth, profile_sources, receiver_limits, resources, rfc5322_format,
+                            tenant_pause, tls_policy)
 
-# Implemented properties, in run order. The first of no_loss,
+# Implemented properties, in run order. offline goes first: it checks the
+# namespace every other property runs in. The first of no_loss,
 # bounded_duplicates, idempotency, dns_mx and receiver_limits runs the real
 # campaign; the others reuse it. tls_policy and outbound_auth run their own
 # real runs after the campaign. rfc5322_format reads the messages of every
@@ -24,10 +25,10 @@ from verifier.props import (backoff_expiry, bounded_duplicates, classification, 
 # itself, with the original binaries and with each mutant's. resources goes
 # last: it reads the memory peak and the duration of everything before it.
 PROPERTIES = {
-    m.NAME: m for m in (profile_sources, classification, backoff_expiry, determinism, ip_warmup,
-                        tenant_pause, destination_isolation, no_loss, bounded_duplicates, idempotency, dns_mx, receiver_limits,
-                        tls_policy, outbound_auth, rfc5322_format, debug_timeline, debug_aggregates,
-                        external_validation, mutation_detection, resources)
+    m.NAME: m for m in (offline, profile_sources, licenses, classification, backoff_expiry, determinism,
+                        ip_warmup, tenant_pause, destination_isolation, no_loss, bounded_duplicates,
+                        idempotency, dns_mx, receiver_limits, tls_policy, outbound_auth, rfc5322_format,
+                        debug_timeline, debug_aggregates, external_validation, mutation_detection, resources)
 }
 
 
@@ -85,5 +86,10 @@ def main(argv=None):
     v.add_argument("--only", help="comma-separated property names")
     v.add_argument("--root", default=".", help="repository root")
     v.add_argument("--bin", help="directory with mtadst (default <root>/bin)")
+    i = sub.add_parser("inventory", help=f"write {licenses.INVENTORY} (contract 4, licenses)")
+    i.add_argument("--root", default=".", help="repository root")
     args = parser.parse_args(argv)
+    if args.cmd == "inventory":
+        print(licenses.write(os.path.abspath(args.root)))
+        return 0
     return verify(args)
